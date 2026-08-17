@@ -713,6 +713,10 @@
       <span class="exhibit-label">Exhibit E</span>
       <span class="exhibit-title">Download PDF</span>
     </button>
+    <button class="tab-btn" data-view="v6" onclick="showView('v6', this)">
+      <span class="exhibit-label">Exhibit F</span>
+      <span class="exhibit-title">AEO / GEO</span>
+    </button>
   </nav>
 </header>
 
@@ -1002,6 +1006,79 @@
     </div>
   </section>
 
+  <!-- ============================================================ -->
+  <!-- VIEW 6 — AEO / GEO AUDIT                                       -->
+  <!-- ============================================================ -->
+  <section id="v6" class="view">
+    <div class="view-head">
+      <div>
+        <div class="exhibit-tag">Exhibit F</div>
+        <h1>AEO / GEO visibility audit</h1>
+        <p>Enter a website URL. We crawl on-page structure, find who's winning for key topics, and return before/after fixes (headings, FAQs, schema).</p>
+      </div>
+    </div>
+
+    <div class="loading-overlay" id="aeo-loading">
+      <span class="dot"></span> Running AEO / GEO audit… (30–90 seconds)
+    </div>
+
+    <div class="search-row" style="margin-bottom:12px;">
+      <input type="text" id="aeo-url-input" placeholder="https://www.buffer.com">
+      <button class="btn" id="aeo-run-btn" type="button" onclick="runAeoGeo()">Run audit</button>
+    </div>
+    <div class="search-row" style="margin-bottom:24px;">
+      <input type="text" id="aeo-keywords-input" placeholder="Optional topics (comma-separated) — leave blank to auto-suggest">
+    </div>
+    <p id="aeo-empty" class="field-value" style="color:var(--text-muted);margin-bottom:24px;">
+      Tip: leave topics blank for auto suggestions. Uses free DuckDuckGo by default.
+    </p>
+
+    <div id="aeo-content" style="display:none;">
+      <div class="intel-hero" id="aeo-hero">
+        <h2 id="aeo-hero-name">—</h2>
+        <div class="sub" id="aeo-hero-sub">—</div>
+        <div class="summary" id="aeo-hero-summary"></div>
+      </div>
+
+      <div class="kpi-row" id="aeo-kpis"></div>
+
+      <div class="card index-card" style="margin-top:8px;">
+        <h4>On-page signals</h4>
+        <div id="aeo-signals"></div>
+      </div>
+
+      <div class="card index-card">
+        <h4>Who's winning (by topic)</h4>
+        <div id="aeo-topics"></div>
+      </div>
+
+      <div class="card index-card">
+        <h4>Gaps</h4>
+        <div id="aeo-gaps"></div>
+      </div>
+
+      <div class="card index-card">
+        <h4>Before / after recommendations</h4>
+        <div id="aeo-recs"></div>
+      </div>
+
+      <div class="card index-card">
+        <h4>Suggested FAQs</h4>
+        <div id="aeo-faqs"></div>
+      </div>
+
+      <div class="card index-card">
+        <h4>GEO snapshot (external mentions)</h4>
+        <div id="aeo-geo"></div>
+      </div>
+
+      <div class="card index-card">
+        <h4>Distribution checklist</h4>
+        <div id="aeo-checklist"></div>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <script>
@@ -1016,7 +1093,7 @@
     document.getElementById(id).classList.toggle('open');
   }
 </script>
-<script src="app.js?v=11"></script>
+<script src="app.js?v=12"></script>
 
 </body>
 </html>

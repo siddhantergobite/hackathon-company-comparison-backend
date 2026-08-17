@@ -33,6 +33,7 @@ gradio_client
 # Research engine
 beautifulsoup4
 duckduckgo_search
+ddgs
 lxml
 pymupdf
 python-docx

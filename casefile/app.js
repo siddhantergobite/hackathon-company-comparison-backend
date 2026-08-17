@@ -3,7 +3,7 @@ const API = (window.location.port === '8765')
   ? window.location.origin
   : `${window.location.protocol}//${window.location.hostname}:8765`;
 
-const state = { brochure: null, target: null, pitch: null, outreachLog: [] };
+const state = { brochure: null, target: null, pitch: null, outreachLog: [], aeo: null };
 
 function showView(id, btn) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -673,6 +673,154 @@ function sendEmail() {
   alert('Email logged (demo — no mail server configured).');
 }
 
+async function runAeoGeo() {
+  const url = (document.getElementById('aeo-url-input')?.value || '').trim();
+  if (!url) return alert('Enter a website URL e.g. https://www.buffer.com');
+
+  const kwRaw = (document.getElementById('aeo-keywords-input')?.value || '').trim();
+  const keywords = kwRaw
+    ? kwRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : null;
+
+  const btn = document.getElementById('aeo-run-btn');
+  const loading = document.getElementById('aeo-loading');
+  const empty = document.getElementById('aeo-empty');
+  const content = document.getElementById('aeo-content');
+
+  if (btn) btn.disabled = true;
+  if (loading) loading.classList.add('show');
+  if (empty) empty.style.display = 'none';
+  if (content) content.style.display = 'none';
+
+  try {
+    const r = await fetch(`${API}/api/aeo-geo-audit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        keywords,
+        use_serpapi: false,
+        max_topics: keywords ? Math.min(keywords.length, 3) : 3,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'AEO/GEO audit failed');
+    state.aeo = d;
+    renderAeoGeo(d);
+    if (content) content.style.display = 'block';
+  } catch (e) {
+    alert('AEO/GEO audit failed: ' + (e.message || e));
+    if (empty) {
+      empty.style.display = 'block';
+      empty.textContent = 'Audit failed — check backend on :8765 and try again.';
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+    if (loading) loading.classList.remove('show');
+  }
+}
+
+function renderAeoGeo(data) {
+  const analysis = data.analysis || {};
+  const onPage = data.on_page || {};
+  const signals = onPage.signals || {};
+  const geo = data.geo_snapshot || {};
+  const meta = data._meta || {};
+
+  document.getElementById('aeo-hero-name').textContent = data.company_name || data.domain || '—';
+  document.getElementById('aeo-hero-sub').textContent =
+    `${data.domain || ''} · ${meta.search_engine || 'duckduckgo'} · ${meta.elapsed_seconds || '?'}s`;
+  document.getElementById('aeo-hero-summary').textContent = analysis.visibility_summary || '';
+
+  const kpis = [
+    ['AEO score', analysis.aeo_score ?? '—'],
+    ['GEO score', analysis.geo_score_blended ?? analysis.geo_score ?? '—'],
+    ['Topics', (data.topics || []).length],
+    ['Mentions', geo.mention_count ?? 0],
+    ['Fixes', (analysis.recommendations || []).length],
+  ];
+  document.getElementById('aeo-kpis').innerHTML = kpis.map(([l, v]) =>
+    `<div class="kpi-chip"><div class="lbl">${esc(l)}</div><div class="val">${esc(String(v))}</div></div>`
+  ).join('');
+
+  const signalTags = [
+    ['H1', signals.has_h1 ? 'Yes' : 'No'],
+    ['Meta', signals.has_meta_description ? 'Yes' : 'No'],
+    ['About', signals.has_about_page ? 'Yes' : 'No'],
+    ['FAQs', signals.faq_count ?? 0],
+    ['FAQ schema', signals.has_faq_schema ? 'Yes' : 'No'],
+    ['Org schema', signals.has_organization_schema ? 'Yes' : 'No'],
+  ].map(([l, v]) => `<span class="tag">${esc(l)}: ${esc(String(v))}</span>`).join('');
+  document.getElementById('aeo-signals').innerHTML = signalTags || '—';
+
+  const topicsHtml = (data.topic_research || []).map(tr => {
+    const winners = (tr.winner_domains || []).map(d => `<span class="tag amber">${esc(d)}</span>`).join('') || '<span class="tag">—</span>';
+    const results = (tr.top_results || []).slice(0, 3).map(r =>
+      `<div class="intel-row"><a href="${esc(ensureUrl(r.url))}" target="_blank" rel="noopener">${esc(r.title || r.url)}</a></div>`
+    ).join('');
+    return `<div class="competitor-card" style="margin-bottom:12px;">
+      <strong>${esc(tr.topic)}</strong>
+      <div style="margin:8px 0;">${winners}</div>
+      ${results}
+    </div>`;
+  }).join('') || '<p class="field-value" style="color:var(--text-muted);">No topic results</p>';
+  document.getElementById('aeo-topics').innerHTML = topicsHtml;
+
+  const gapsHtml = (analysis.gaps || []).map(g =>
+    `<div class="analysis-box" style="margin-bottom:10px;">
+      <span class="tag red">${esc(g.severity || '')}</span>
+      <span class="tag">${esc(g.area || '')}</span>
+      <p style="margin-top:8px;"><strong>${esc(g.finding || '')}</strong></p>
+      <p class="field-value" style="color:var(--text-muted);">${esc(g.why_it_matters || '')}</p>
+    </div>`
+  ).join('') || '<p class="field-value">No gaps listed</p>';
+  document.getElementById('aeo-gaps').innerHTML = gapsHtml;
+
+  const recsHtml = (analysis.recommendations || []).map(rec =>
+    `<div class="competitor-card" style="margin-bottom:14px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <span class="tag red">${esc(rec.priority || '')}</span>
+        <span class="tag">${esc(rec.type || '')}</span>
+        <span class="tag amber">${esc(rec.page || '')}</span>
+      </div>
+      <strong>${esc(rec.title || '')}</strong>
+      <p class="field-value" style="margin:8px 0;color:var(--text-muted);">${esc(rec.why || '')}</p>
+      <div class="compare-table-wrap" style="overflow:auto;">
+        <table class="compare-table">
+          <tr><th style="width:90px;">Before</th><td><pre style="white-space:pre-wrap;margin:0;font-family:var(--font-mono);font-size:12px;">${esc(rec.before || '')}</pre></td></tr>
+          <tr><th>After</th><td><pre style="white-space:pre-wrap;margin:0;font-family:var(--font-mono);font-size:12px;">${esc(rec.after || '')}</pre></td></tr>
+        </table>
+      </div>
+    </div>`
+  ).join('') || '<p class="field-value">No recommendations</p>';
+  document.getElementById('aeo-recs').innerHTML = recsHtml;
+
+  const faqsHtml = (analysis.suggested_faqs || []).map(f =>
+    `<div class="intel-row" style="margin-bottom:10px;">
+      <strong>Q: ${esc(f.question || '')}</strong><br>
+      <span class="field-value">A: ${esc(f.answer || '')}</span>
+    </div>`
+  ).join('') || '<p class="field-value">No FAQs suggested</p>';
+  document.getElementById('aeo-faqs').innerHTML = faqsHtml;
+
+  const mentions = (geo.external_mentions || []).slice(0, 8).map(m =>
+    `<div class="intel-row">
+      <span class="tag">${esc(m.kind || 'other')}</span>
+      <a href="${esc(ensureUrl(m.url))}" target="_blank" rel="noopener">${esc(m.title || m.url)}</a>
+    </div>`
+  ).join('');
+  document.getElementById('aeo-geo').innerHTML =
+    `<p class="field-value" style="margin-bottom:10px;">${esc(geo.note || '')}</p>
+     <div style="margin-bottom:10px;">${(geo.mention_kinds || []).map(k => `<span class="tag amber">${esc(k)}</span>`).join('')}</div>
+     ${mentions || '<p class="field-value">No external mentions found yet</p>'}`;
+
+  document.getElementById('aeo-checklist').innerHTML =
+    (analysis.distribution_checklist || []).map(c =>
+      `<div class="intel-row"><span class="tag">${esc(c.helps || '')}</span> <strong>${esc(c.action || '')}</strong>
+        <span style="color:var(--text-muted);"> — ${esc(c.done_hint || '')}</span></div>`
+    ).join('') || '<p class="field-value">—</p>';
+}
+
 async function downloadPdf() {
   if (!state.brochure || !state.target) return alert('Complete Exhibits A & B first');
   try {
@@ -701,6 +849,7 @@ window.syncOutreach = syncOutreach;
 window.showView = showView;
 window.showIntelTab = showIntelTab;
 window.toggleVerbatim = toggleVerbatim;
+window.runAeoGeo = runAeoGeo;
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('brochure-search-btn')?.addEventListener('click', searchBrochure);
@@ -716,4 +865,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('pitch-btn')?.addEventListener('click', generatePitch);
   document.getElementById('pdf-btn')?.addEventListener('click', downloadPdf);
+  document.getElementById('aeo-run-btn')?.addEventListener('click', runAeoGeo);
+  document.getElementById('aeo-url-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') runAeoGeo();
+  });
 });

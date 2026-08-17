@@ -37,6 +37,7 @@ from backend.services import (
     brochure_extract,
     pitch_generator,
     pdf_export,
+    aeo_geo,
 )
 
 app = FastAPI(title="AI Creative Studio", version="2.0.0")
@@ -394,6 +395,35 @@ async def api_company_research(req: CompanyResearchRequest):
     try:
         from fastapi.responses import JSONResponse
         result = company_research.run(req.url)
+        return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AeoGeoAuditRequest(BaseModel):
+    url: str
+    keywords: Optional[list[str]] = None
+    use_serpapi: bool = False
+    max_topics: int = 3
+    max_serp_searches: int = 3
+
+
+@app.post("/api/aeo-geo-audit")
+async def api_aeo_geo_audit(req: AeoGeoAuditRequest):
+    """
+    Hackathon one-shot AEO/GEO audit:
+    crawl site → topics → who's winning → gaps → before/after fixes → GEO snapshot.
+    DuckDuckGo by default; set use_serpapi=true + SERPAPI_KEY for Google SERP (budgeted).
+    """
+    try:
+        from fastapi.responses import JSONResponse
+        result = aeo_geo.run(
+            req.url,
+            keywords=req.keywords,
+            use_serpapi=req.use_serpapi,
+            max_topics=req.max_topics,
+            max_serp_searches=req.max_serp_searches,
+        )
         return JSONResponse(content=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
