@@ -1,0 +1,15 @@
+{
+  "name": "Microsoft",
+  "comps": [
+    "Amazon",
+    "Apple Inc."
+  ],
+  "mp": {
+    "value": "Not publicly available",
+    "confidence": "Low",
+    "source": "Judge"
+  },
+  "blocked": true,
+  "leaders": [],
+  "reg": "disabled"
+}

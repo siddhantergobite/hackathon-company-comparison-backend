@@ -9,6 +9,7 @@ Phase 5 — REPORT    : Structured deep intelligence JSON
 """
 
 import os, re, json, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, urljoin
 import requests
 from dotenv import load_dotenv
@@ -16,7 +17,139 @@ load_dotenv()
 
 from backend.services import llm as llm_client
 
-MODEL = llm_client.AZURE_MODEL if llm_client.azure_configured() else "llama-3.3-70b-versatile"
+MODEL = (
+    llm_client.AZURE_MODEL
+    if llm_client.azure_configured()
+    else (
+        llm_client.GROQ_MODEL
+        if getattr(llm_client, "RESEARCH_USE_GROQ", False) and llm_client.groq_configured()
+        else (llm_client.AZURE_MODEL if llm_client.azure_configured() else "gpt-5-mini")
+    )
+)
+
+# Fast research mode (default ON) — target ~45–70s instead of 3–4 minutes.
+# Set RESEARCH_FAST=0 for deeper (slower) sweeps.
+RESEARCH_FAST = os.getenv("RESEARCH_FAST", "1").strip().lower() not in ("0", "false", "no", "off")
+# Skip second LLM judge pass in fast mode (biggest latency win after scrape/search).
+RESEARCH_SKIP_JUDGE = os.getenv(
+    "RESEARCH_SKIP_JUDGE",
+    "1" if RESEARCH_FAST else "0",
+).strip().lower() not in ("0", "false", "no", "off")
+# Skip multi-query hiring search in fast mode (careers page text only).
+RESEARCH_SKIP_HIRING_SEARCH = os.getenv(
+    "RESEARCH_SKIP_HIRING_SEARCH",
+    "1" if RESEARCH_FAST else "0",
+).strip().lower() not in ("0", "false", "no", "off")
+
+# ZaubaCorp / Indian MCA / CIN — fully OFF (user requested remove CIN completely).
+# Research uses website + global public web only (pre-CIN behavior).
+ENABLE_ZAUBACORP = False
+ENABLE_CIN_LOOKUP = False
+
+# Domain-stem → public brand name (used when scrape is blocked / title is garbage)
+KNOWN_BRANDS = {
+    "microsoft": "Microsoft",
+    "buffer": "Buffer",
+    "google": "Google",
+    "apple": "Apple",
+    "amazon": "Amazon",
+    "meta": "Meta",
+    "facebook": "Meta",
+    "linkedin": "LinkedIn",
+    "salesforce": "Salesforce",
+    "oracle": "Oracle",
+    "ibm": "IBM",
+    "adobe": "Adobe",
+    "nvidia": "NVIDIA",
+    "openai": "OpenAI",
+    "notion": "Notion",
+    "slack": "Slack",
+    "atlassian": "Atlassian",
+    "hubspot": "HubSpot",
+    "shopify": "Shopify",
+    "stripe": "Stripe",
+    "tcs": "Tata Consultancy Services",
+    "infosys": "Infosys",
+    "wipro": "Wipro",
+    "ergobite": "Ergobite",
+    "accenture": "Accenture",
+    "deloitte": "Deloitte",
+}
+
+
+def _domain_stem(domain: str) -> str:
+    d = (domain or "").lower().replace("www.", "")
+    return (d.split(".")[0] if d else "").strip()
+
+
+def _brand_from_domain(domain: str) -> str:
+    stem = _domain_stem(domain)
+    if not stem:
+        return "Company"
+    return KNOWN_BRANDS.get(stem) or stem.replace("-", " ").title()
+
+
+def _is_blocked_page_text(title: str = "", text: str = "") -> bool:
+    blob = f"{title or ''} {text or ''}".lower()
+    markers = (
+        "request has been blocked",
+        "access denied",
+        "attention required",
+        "cf-browser-verification",
+        "captcha",
+        "bot detection",
+        "unusual traffic",
+        "automated process",
+        "your current user-agent string appears to be from an automated",
+        "enable javascript and cookies",
+        "sorry, you have been blocked",
+    )
+    return any(m in blob for m in markers)
+
+
+def _name_matches_domain(name: str, domain: str) -> bool:
+    """True if candidate company name is plausibly the website brand."""
+    if isinstance(name, dict):
+        name = name.get("value") or name.get("name") or ""
+    name = str(name or "")
+    stem = _domain_stem(domain)
+    if not stem:
+        return True
+    n = re.sub(r"[^a-z0-9]", "", name.lower())
+    s = re.sub(r"[^a-z0-9]", "", stem)
+    if not n or len(n) < 2:
+        return False
+    if s in n or n in s:
+        return True
+    brand = KNOWN_BRANDS.get(stem, "")
+    b = re.sub(r"[^a-z0-9]", "", brand.lower())
+    if b and (b in n or n in b):
+        return True
+    # reject obvious block-page titles used as names
+    if _is_blocked_page_text(name, ""):
+        return False
+    junk_starts = ("your request", "access denied", "attention required", "just a moment")
+    if any(name.lower().startswith(j) for j in junk_starts):
+        return False
+    return False
+
+
+def _anchor_company_name(candidate: str, domain: str, scraped: dict | None = None) -> str:
+    """Never let a blocked/WAF page or unrelated LLM name replace the domain brand."""
+    scraped = scraped or {}
+    if isinstance(candidate, dict):
+        candidate = candidate.get("value") or candidate.get("name") or ""
+    candidate = str(candidate or "").strip()
+    brand = _brand_from_domain(domain)
+    blocked = bool(scraped.get("_scrape_blocked")) or _is_blocked_page_text(
+        scraped.get("title") or "", scraped.get("homepage_text") or ""
+    )
+    if blocked:
+        return brand
+    if _name_matches_domain(candidate, domain):
+        return candidate or brand
+    return brand
+
 
 HEADERS = {
     "User-Agent": (
@@ -170,6 +303,350 @@ def _zauba_match_score(query: str, url: str, structured: dict = None) -> int:
 
 
 _CIN_RE = re.compile(r"[LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}")
+_CIN_VALID_TYPES = {
+    "PTC", "PLC", "FTC", "GAP", "NPL", "OPC", "FLP", "SGC", "ULL", "ULT",
+    "GOI", "GAT", "NPL",
+}
+
+
+def _safe_print(msg: str) -> None:
+    """Print without crashing on Windows cp1252 consoles."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", "replace").decode("ascii"))
+
+
+def _is_valid_cin(cin: str) -> bool:
+    """Strict Indian MCA CIN format check (21 chars)."""
+    c = re.sub(r"[\s\-]", "", (cin or "").upper())
+    if not _CIN_RE.fullmatch(c):
+        return False
+    # Year of incorporation embedded in CIN
+    try:
+        year = int(c[8:12])
+        if year < 1947 or year > time.gmtime().tm_year + 1:
+            return False
+    except Exception:
+        return False
+    ctype = c[12:15]
+    if ctype not in _CIN_VALID_TYPES and not re.fullmatch(r"[A-Z]{3}", ctype):
+        return False
+    return True
+
+
+def _normalize_cin(cin: str) -> str:
+    return re.sub(r"[\s\-]", "", (cin or "").upper())
+
+
+def _legal_matches_brand(legal_name: str, brand: str, domain: str) -> bool:
+    legal = re.sub(r"[^a-z0-9]", "", (legal_name or "").lower())
+    brand_l = re.sub(r"[^a-z0-9]", "", (brand or "").lower())
+    stem = re.sub(r"[^a-z0-9]", "", _domain_stem(domain))
+    if not legal:
+        return False
+    if brand_l and len(brand_l) >= 3 and brand_l in legal:
+        return True
+    if stem and len(stem) >= 3 and stem in legal:
+        return True
+    # Known brand expansions
+    known = KNOWN_BRANDS.get(stem, "")
+    known_l = re.sub(r"[^a-z0-9]", "", known.lower())
+    if known_l and known_l in legal:
+        return True
+    return False
+
+
+def _discover_cin_candidates(company_name: str, domain: str, scraped: dict, raw_html: str = "") -> list[dict]:
+    """
+    Collect possible CINs from website, public search, and LLM.
+    Does NOT invent — only extracts patterns that already look like CINs.
+    """
+    found = []
+    seen = set()
+
+    def _add(cin: str, source: str, evidence: str = ""):
+        c = _normalize_cin(cin)
+        if not _is_valid_cin(c) or c in seen:
+            return
+        seen.add(c)
+        found.append({"cin": c, "source": source, "evidence": (evidence or "")[:200]})
+
+    # 1) Website / HTML
+    signals = _extract_entity_signals(scraped, f"https://{domain}", raw_html=raw_html)
+    for c in signals.get("cins") or []:
+        _add(c, "website", "Found on company website HTML/text")
+    if signals.get("cin"):
+        _add(signals["cin"], "website", "Primary CIN extracted from website")
+
+    # 2) Public web search (Tofler / Zauba / MCA mentions) — extract CIN patterns only
+    queries = [
+        f'"{company_name}" CIN',
+        f"{company_name} {domain} CIN Private Limited",
+        f'site:zaubacorp.com "{company_name}"',
+        f'site:tofler.in "{company_name}" CIN',
+    ]
+    for q in queries[:3]:
+        for r in _ddg_search(q, max_results=5):
+            blob = f"{r.get('title','')} {r.get('body','')} {r.get('href','')}"
+            for m in _CIN_RE.findall(blob.upper()):
+                _add(m, "public_search", q)
+
+    # 3) LLM (Groq/Gemini via shared client) — may only return an existing CIN, never invent
+    try:
+        prompt = f"""You must find the official Indian MCA Corporate Identification Number (CIN) for this company IF it is an Indian registered company.
+
+Company brand: {company_name}
+Website domain: {domain}
+Site title: {(scraped.get('title') or '')[:120]}
+About excerpt: {(scraped.get('about_text') or scraped.get('homepage_text') or '')[:500]}
+
+Rules:
+1. Return ONLY valid JSON.
+2. CIN must be exactly 21 chars matching Indian MCA format (starts with L or U).
+3. If you are NOT highly certain, return empty cin.
+4. NEVER invent / guess a CIN.
+5. Global non-India companies (e.g. google.com, microsoft.com, buffer.com) usually have NO Indian parent CIN for the global site — return empty unless this website is clearly an Indian legal entity.
+
+JSON schema:
+{{"cin":"","confidence":"High|Medium|Low","legal_name":"","reason":"short"}}
+"""
+        raw = llm_client.chat_groq(
+            [
+                {"role": "system", "content": "Return valid JSON only. Prefer empty CIN over a wrong CIN."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=250,
+            json_mode=True,
+            timeout=25.0,
+        )
+        raw = re.sub(r"^```(?:json)?", "", (raw or "").strip(), flags=re.I).strip()
+        raw = re.sub(r"```$", "", raw).strip()
+        start, end = raw.find("{"), raw.rfind("}")
+        data = json.loads(raw[start:end + 1]) if start >= 0 and end > start else {}
+        cin = _normalize_cin(data.get("cin") or "")
+        conf = str(data.get("confidence") or "Low").lower()
+        if cin and conf in ("high", "medium") and _is_valid_cin(cin):
+            _add(cin, "llm", data.get("reason") or data.get("legal_name") or "LLM")
+    except Exception as e:
+        print(f"[CIN] LLM discover failed: {e}")
+
+    print(f"[CIN] Candidates: {[f.get('cin') for f in found]}")
+    return found
+
+
+def _verify_cin(cin: str, company_name: str, domain: str) -> dict:
+    """
+    Verify CIN against MCA mirror (Zauba). Accept only if page CIN matches
+    and legal name matches the website brand/domain.
+    """
+    cin = _normalize_cin(cin)
+    out = {
+        "ok": False,
+        "cin": cin,
+        "url": "",
+        "structured": {},
+        "text": "",
+        "reason": "not verified",
+        "match_confidence": "Low",
+    }
+    if not _is_valid_cin(cin):
+        out["reason"] = "invalid CIN format"
+        return out
+
+    urls = _lookup_zauba_by_cin(cin)
+    # Direct known URL pattern fallback
+    urls = list(dict.fromkeys(urls + [
+        f"https://www.zaubacorp.com/companysearchresults/{cin}",
+    ]))
+
+    best = None
+    for u in urls[:5]:
+        page = _fetch_zaubacorp_page(u) if "companysearchresults" not in u else {"structured": {}, "url": u, "text": ""}
+        # If searchresults page, try to extract company link first
+        if "companysearchresults" in (u or ""):
+            try:
+                resp = requests.get(u, headers=HEADERS, timeout=12)
+                if resp.status_code == 200:
+                    for m in re.finditer(
+                        rf"zaubacorp\.com/([A-Z0-9\-]*{re.escape(cin)}[A-Z0-9\-]*)",
+                        resp.text, re.I,
+                    ):
+                        page = _fetch_zaubacorp_page(f"https://www.zaubacorp.com/{m.group(1)}")
+                        if page.get("structured"):
+                            break
+            except Exception:
+                continue
+
+        zs = page.get("structured") or {}
+        page_cin = _normalize_cin(zs.get("CIN") or "")
+        # Sometimes CIN only in URL/text
+        if not page_cin:
+            blob = f"{page.get('url','')} {page.get('text','')}"
+            m = _CIN_RE.search(blob.upper())
+            page_cin = m.group(0) if m else ""
+        if page_cin != cin:
+            # still accept if URL contains CIN and company name present
+            if cin not in (page.get("url") or "").upper():
+                continue
+        legal = zs.get("Company Name") or ""
+        if not legal:
+            continue
+        if not _legal_matches_brand(legal, company_name, domain):
+            _safe_print(f"[CIN] Reject {cin} - legal '{legal}' does not match brand '{company_name}' / {domain}")
+            continue
+        # Reject obvious sister/subsidiary for global brand sites
+        if _is_india_subsidiary_for_global_site(legal, domain, company_name):
+            _safe_print(f"[CIN] Reject {cin} - India subsidiary of global site ({legal})")
+            continue
+        best = page
+        break
+
+    if not best:
+        out["reason"] = "CIN not found on MCA mirror or name mismatch"
+        return out
+
+    zs = best.get("structured") or {}
+    zs["CIN"] = cin
+    out.update({
+        "ok": True,
+        "url": best.get("url") or "",
+        "structured": zs,
+        "text": best.get("text") or "",
+        "reason": f"CIN verified on MCA mirror for {zs.get('Company Name')}",
+        "match_confidence": "High",
+        "legal_name": zs.get("Company Name") or "",
+    })
+    return out
+
+
+def _cin_name_fit_score(legal_name: str, brand: str, domain: str) -> int:
+    """Higher = better match of MCA legal name to website brand."""
+    if not _legal_matches_brand(legal_name, brand, domain):
+        return -999
+    legal_u = (legal_name or "").upper()
+    brand_u = (brand or "").upper()
+    stem = _domain_stem(domain).upper()
+    score = 50
+    # Prefer names that start with brand/stem
+    if legal_u.startswith(brand_u) or (stem and legal_u.startswith(stem)):
+        score += 40
+    # Penalize sister/subsidiary tokens
+    for tok in _SUBSIDIARY_TOKENS:
+        if tok.upper().replace(" ", "") in re.sub(r"[^A-Z0-9]", "", legal_u):
+            score -= 80
+    for tok in ("INFOSYSTEMS", "INFOTECH", "TECHNOLOGIES", "SOLUTIONS", "SERVICES", "CONSULTING"):
+        # soft penalty only when brand itself doesn't include that token
+        if tok in legal_u and tok not in brand_u and tok not in stem:
+            score -= 5
+    # Prefer shorter legal names (less likely sister entity stuffing)
+    score -= max(0, len(legal_u.split()) - 4) * 3
+    return score
+
+
+def _cin_year(cin: str) -> int:
+    try:
+        return int(_normalize_cin(cin)[8:12])
+    except Exception:
+        return 9999
+
+
+def _resolve_verified_cin(scraped: dict, url: str, company_name: str, raw_html: str = "") -> dict:
+    """
+    CIN-first resolver:
+    - Find valid CIN candidates
+    - Verify against MCA mirror
+    - Stick to best brand-matching verified CIN
+    - If none, return empty (caller continues previous global flow)
+    """
+    domain = urlparse(url).netloc.replace("www.", "")
+    brand = company_name or _brand_from_domain(domain)
+    empty = {
+        "cin_verified": False,
+        "cin": "",
+        "match_confidence": "Low",
+        "match_reason": "No verified CIN",
+        "url": "",
+        "structured": {},
+        "text": "",
+        "preferred_display_name": brand,
+        "entity_signals": _extract_entity_signals(scraped, url, raw_html),
+        "candidates": [],
+    }
+    if not ENABLE_CIN_LOOKUP:
+        empty["match_reason"] = "CIN lookup disabled"
+        return empty
+
+    # Skip CIN chase for obvious global consumer domains when brand is known global
+    stem = _domain_stem(domain)
+    global_no_cin = {
+        "google", "microsoft", "apple", "amazon", "meta", "facebook", "buffer",
+        "notion", "slack", "openai", "nvidia", "oracle", "salesforce", "adobe",
+    }
+    # Still allow if website itself embeds a CIN (Indian entity page)
+    signals = empty["entity_signals"]
+    if stem in global_no_cin and not (signals.get("cins") or signals.get("cin")):
+        empty["match_reason"] = "Global brand site - CIN lookup skipped unless present on website"
+        _safe_print(f"[CIN] Skip lookup for global brand domain {domain}")
+        return empty
+
+    candidates = _discover_cin_candidates(brand, domain, scraped, raw_html=raw_html)
+    # Prefer website CINs, then LLM, then public search
+    src_rank = {"website": 0, "llm": 1, "public_search": 2}
+    candidates = sorted(candidates, key=lambda c: src_rank.get(c.get("source"), 9))[:5]
+    empty["candidates"] = candidates
+
+    verified = []
+    for cand in candidates:
+        try:
+            ver = _verify_cin(cand["cin"], brand, domain)
+        except Exception as e:
+            _safe_print(f"[CIN] verify error for {cand.get('cin')}: {e}")
+            continue
+        if not ver.get("ok"):
+            _safe_print(f"[CIN] candidate {cand['cin']} failed: {ver.get('reason')}")
+            continue
+        fit = _cin_name_fit_score(ver.get("legal_name") or "", brand, domain)
+        verified.append({**ver, "cin_source": cand.get("source") or "", "fit": fit})
+        _safe_print(
+            f"[CIN] ok {ver['cin']} -> {ver.get('legal_name')} "
+            f"(source={cand.get('source')}, fit={fit})"
+        )
+
+    if not verified:
+        _safe_print("[CIN] No verified CIN - falling back to global research path")
+        return empty
+
+    verified.sort(
+        key=lambda v: (
+            -(int(v.get("fit") or 0) // 10),  # coarse fit band
+            _cin_year(v.get("cin") or ""),     # older CIN preferred inside same band
+            -int(v.get("fit") or 0),
+            src_rank.get(v.get("cin_source"), 9),
+        )
+    )
+    best = verified[0]
+    _safe_print(
+        f"[CIN] LOCKED {best['cin']} -> {best.get('legal_name')} "
+        f"(source={best.get('cin_source')}, fit={best.get('fit')})"
+    )
+    return {
+        "cin_verified": True,
+        "cin": best["cin"],
+        "match_confidence": "High",
+        "match_reason": best.get("reason") or "CIN verified",
+        "match_score": 1000,
+        "url": best.get("url") or "",
+        "structured": best.get("structured") or {},
+        "text": best.get("text") or "",
+        "preferred_display_name": best.get("legal_name") or brand,
+        "entity_signals": signals,
+        "candidates": candidates,
+        "cin_source": best.get("cin_source") or "",
+    }
+
+
 _GENERIC_EMAIL_DOMAINS = {
     "gmail.com", "yahoo.com", "rediffmail.com", "hotmail.com", "outlook.com",
     "ymail.com", "live.com", "protonmail.com",
@@ -179,8 +656,15 @@ _INDIAN_CITIES = (
     "hyderabad", "bhilwara", "jaipur", "noida", "gurgaon", "gurugram", "ahmedabad",
     "kochi", "cochin", "lucknow", "indore", "nagpur", "surat", "vadodara",
 )
-_MCA_CONF_HIGH = 120
-_MCA_CONF_MED = 70
+_MCA_CONF_HIGH = 140
+_MCA_CONF_MED = 100
+
+# Tokens that usually mean subsidiary / sister / non-parent entity
+_SUBSIDIARY_TOKENS = {
+    "eserve", "e-serve", "e serve", "foundation", "trust", "welfare",
+    "employee", "employees", "benefit", "pension", "holdings", "investment",
+    "ventures", "incubator", "academy", "foundation", "charitable",
+}
 
 
 def _normalize_legal_name(name: str) -> str:
@@ -276,6 +760,19 @@ def _entity_match_score(signals: dict, structured: dict, url: str) -> tuple[int,
         score += 40
         reasons.append("Brand token in legal name")
 
+    # Heavy penalty for subsidiary / sister entities when website is the brand domain
+    legal_l = legal.lower()
+    site_blob_l = " ".join(signals.get("legal_names") or []).lower() + " " + stem
+    for bad in _SUBSIDIARY_TOKENS:
+        if bad in legal_l and bad not in site_blob_l and bad not in (signals.get("domain") or "").lower():
+            score -= 140
+            reasons.append(f"Subsidiary/sister token: {bad}")
+
+    # Prefer "LIMITED" / "INDIA LIMITED" parents over long multi-token service arms
+    if re.search(r"\bE[\s\-]?SERVE\b", legal, re.I):
+        score -= 180
+        reasons.append("E-Serve style entity — unlikely primary brand site")
+
     site_blob = " ".join(signals.get("legal_names") or []).lower()
     site_blob += " " + stem + " " + (signals.get("domain") or "")
     site_tokens = set(_meaningful_tokens(site_blob) + (signals.get("website_keywords") or []))
@@ -330,13 +827,27 @@ def _build_zauba_queries(signals: dict, scraped: dict) -> list[str]:
         queries.append(_normalize_legal_name(name))
 
     stem = signals.get("domain_stem") or ""
-    if stem:
-        queries.extend([
-            f"{stem} india limited",
-            f"{stem} limited",
-            f"{stem} tech solutions private limited",
-            stem,
-        ])
+    for q in [
+        f"{stem} india limited",
+        f"{stem} limited",
+        stem,
+    ]:
+        if stem:
+            queries.append(q)
+
+    # Famous brand expansions — helps avoid matching sister/subsidiary entities
+    _BRAND_EXPANSIONS = {
+        "tcs": ["Tata Consultancy Services Limited", "Tata Consultancy Services"],
+        "infosys": ["Infosys Limited"],
+        "wipro": ["Wipro Limited"],
+        "hcl": ["HCL Technologies Limited"],
+        "accenture": ["Accenture Solutions Private Limited"],
+        "microsoft": ["Microsoft Corporation"],
+        "google": ["Google LLC"],
+        "amazon": ["Amazon.com, Inc."],
+    }
+    for extra in _BRAND_EXPANSIONS.get(stem.lower(), []):
+        queries.insert(0, extra)
 
     title = re.split(r"[|\-—–]", scraped.get("title") or "")[0].strip()
     generic_title = bool(re.search(
@@ -345,9 +856,8 @@ def _build_zauba_queries(signals: dict, scraped: dict) -> list[str]:
     )) or len(title.split()) > 6
     if title and not generic_title:
         queries.append(title)
-        queries.append(f"{title} private limited")
 
-    return list(dict.fromkeys(q for q in queries if q and len(q.strip()) >= 3))[:10]
+    return list(dict.fromkeys(q for q in queries if q and len(q.strip()) >= 3))[:6]
 
 
 def _collect_zauba_candidate_urls(search_name: str) -> list[str]:
@@ -359,52 +869,33 @@ def _collect_zauba_candidate_urls(search_name: str) -> list[str]:
         if _is_zaubacorp_company_url(href) and href not in candidate_urls:
             candidate_urls.append(href)
 
+    # Reduce ZaubaCorp HTML search fan-out for speed
     for q in [
         f"site:zaubacorp.com {search_name}",
-        f"site:zaubacorp.com {search_name} CIN",
         f"zaubacorp {search_name}",
     ]:
-        for r in _ddg_search(q, max_results=8):
+        for r in _ddg_search(q, max_results=5):
             _collect_url(r.get("href", ""))
 
     from bs4 import BeautifulSoup
-    for token in _meaningful_tokens(search_name)[:3]:
+    for token in _meaningful_tokens(search_name)[:2]:
         try:
             sr = requests.get(
                 f"https://www.zaubacorp.com/companysearchresults/{token.upper()}",
-                headers=HEADERS, timeout=15,
+                headers=HEADERS, timeout=10,
             )
             if sr.status_code != 200:
                 continue
             for a in BeautifulSoup(sr.text, "html.parser").find_all("a", href=True):
                 _collect_url(a["href"])
+                if len(candidate_urls) >= 8:
+                    break
         except Exception:
             continue
+        if len(candidate_urls) >= 8:
+            break
 
-    try:
-        search_url = (
-            f"https://www.zaubacorp.com/company-list/p-1/q-"
-            f"{requests.utils.quote(search_name)}"
-        )
-        resp = requests.get(search_url, headers=HEADERS, timeout=15)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        qtokens = _meaningful_tokens(search_name)
-        ranked = []
-        for a in soup.find_all("a", href=True):
-            full = _normalize_zauba_href(a["href"])
-            if not _is_zaubacorp_company_url(full):
-                continue
-            link_text = a.get_text(" ", strip=True).lower()
-            score = sum(25 for t in qtokens if t in link_text) + sum(15 for t in qtokens if t in full.lower())
-            ranked.append((score, full))
-        ranked.sort(key=lambda x: x[0], reverse=True)
-        for score, href in ranked[:8]:
-            if score >= 25:
-                _collect_url(href)
-    except Exception:
-        pass
-
-    return candidate_urls
+    return candidate_urls[:8]
 
 
 def _lookup_zauba_by_cin(cin: str) -> list[str]:
@@ -565,29 +1056,121 @@ def _resolve_mca_entity(scraped: dict, url: str, raw_html: str = "") -> dict:
         for u in _lookup_zauba_by_cin(signals["cin"]):
             _evaluate(_fetch_zaubacorp_page(u))
 
-    for q in _build_zauba_queries(signals, scraped):
-        for u in _collect_zauba_candidate_urls(q)[:6]:
+    for q in _build_zauba_queries(signals, scraped)[:4]:
+        for u in _collect_zauba_candidate_urls(q)[:4]:
             _evaluate(_fetch_zaubacorp_page(u))
+
+    # Direct MCA name search for brand expansions (find parent, not sister cos)
+    from bs4 import BeautifulSoup
+    for q in _build_zauba_queries(signals, scraped)[:3]:
+        try:
+            token = requests.utils.quote(q.upper())
+            sr = requests.get(
+                f"https://www.zaubacorp.com/companysearchresults/{token}",
+                headers=HEADERS, timeout=12,
+            )
+            if sr.status_code != 200:
+                continue
+            soup = BeautifulSoup(sr.text, "html.parser")
+            for a in soup.find_all("a", href=True)[:12]:
+                href = _normalize_zauba_href(a["href"])
+                if _is_zaubacorp_company_url(href):
+                    _evaluate(_fetch_zaubacorp_page(href))
+        except Exception as e:
+            print(f"[MCA] direct search fail for '{q}': {e}")
 
     if not candidates:
         print(f"[MCA] No ZaubaCorp candidates for '{signals.get('domain_stem')}'")
         return empty
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
-    best = candidates[0]
+
+    # Auto-reject obvious subsidiaries before spending LLM calls
+    filtered = []
+    for cand in candidates:
+        legal_l = (cand.get("legal_name") or "").lower()
+        if re.search(r"\be[\s\-]?serve\b", legal_l) or any(t in legal_l for t in ("agro", "foundation", "trust", "welfare")):
+            # keep only if website itself is that niche
+            site_l = ((scraped.get("title") or "") + " " + (scraped.get("description") or "")).lower()
+            if not any(t in site_l for t in ("e-serve", "eserve", "agro", "foundation")):
+                print(f"[MCA] auto-skip subsidiary-like '{cand['legal_name']}'")
+                continue
+        filtered.append(cand)
+    if filtered:
+        candidates = filtered
+
+    # LLM-as-judge: never accept a registry entity the judge rejects
+    from backend.services import llm_judge
+    brand = (signals.get("domain_stem") or "Company").replace("-", " ").title()
+    accepted = None
+    for cand in candidates[:4]:
+        if cand["score"] < (_MCA_CONF_MED - 50):
+            continue
+        legal_l = (cand.get("legal_name") or "").lower()
+        stem = (signals.get("domain_stem") or "").lower()
+        # Fast path: strong brand match, no subsidiary tokens → accept without LLM
+        strong = (
+            cand["score"] >= _MCA_CONF_HIGH
+            and stem
+            and stem in legal_l
+            and not re.search(r"\be[\s\-]?serve\b", legal_l)
+            and not any(t in legal_l for t in ("foundation", "trust", "welfare", "agro"))
+        )
+        if strong:
+            accepted = cand
+            accepted["judge"] = {
+                "accept": True,
+                "confidence": "High",
+                "preferred_display_name": brand,
+                "reason": "Strong heuristic brand/legal match (LLM skipped for speed)",
+                "is_subsidiary_or_sister": False,
+            }
+            print(f"[MCA] strong-match accept '{cand['legal_name']}' score={cand['score']}")
+            break
+        if "Subsidiary/sister token" in (cand.get("reason") or "") and cand["score"] < _MCA_CONF_MED:
+            continue
+        verdict = llm_judge.judge_entity_match(
+            website_url=url,
+            domain=signals.get("domain") or "",
+            brand_name=brand,
+            site_title=scraped.get("title") or "",
+            site_description=scraped.get("description") or "",
+            site_about_excerpt=(scraped.get("about_text") or scraped.get("homepage_text") or "")[:900],
+            candidate={
+                "legal_name": cand["legal_name"],
+                "cin": (cand.get("structured") or {}).get("CIN") or "",
+                "score": cand["score"],
+                "reason": cand["reason"],
+            },
+        )
+        print(f"[MCA Judge] '{cand['legal_name']}' accept={verdict.get('accept')} — {verdict.get('reason')}")
+        if verdict.get("accept") and str(verdict.get("confidence", "")).lower() in ("high", "medium"):
+            accepted = cand
+            accepted["judge"] = verdict
+            break
+
     alts = [
         {"legal_name": c["legal_name"], "score": c["score"], "url": c["url"]}
-        for c in candidates[1:4]
+        for c in candidates[:4]
+        if not accepted or c["url"] != accepted["url"]
     ]
 
-    if best["score"] < _MCA_CONF_MED:
+    if not accepted:
+        best = candidates[0] if candidates else {"legal_name": "", "score": 0, "reason": "none"}
         print(
-            f"[MCA] Rejected weak match '{best['legal_name']}' "
-            f"(score {best['score']}) — {best['reason']}"
+            f"[MCA] Judge rejected all candidates (best was '{best.get('legal_name')}' "
+            f"score {best.get('score')}) — hiding directors/registry"
         )
-        return {**empty, "alternatives": alts, "match_reason": best["reason"], "match_score": best["score"]}
+        return {
+            **empty,
+            "alternatives": alts,
+            "match_reason": f"No judge-approved MCA match (best: {best.get('reason')})",
+            "match_score": best.get("score") or 0,
+            "preferred_display_name": brand,
+        }
 
-    conf = "High" if best["score"] >= _MCA_CONF_HIGH else "Medium"
+    best = accepted
+    conf = "High" if best["score"] >= _MCA_CONF_HIGH and str((best.get("judge") or {}).get("confidence")).lower() == "high" else "Medium"
     print(
         f"[MCA] Matched '{best['legal_name']}' "
         f"(score {best['score']}, {conf}) — {best['reason']}"
@@ -598,9 +1181,10 @@ def _resolve_mca_entity(scraped: dict, url: str, raw_html: str = "") -> dict:
         "structured": best["structured"],
         "match_score": best["score"],
         "match_confidence": conf,
-        "match_reason": best["reason"],
+        "match_reason": best["reason"] + " | judge: " + ((best.get("judge") or {}).get("reason") or ""),
         "alternatives": alts,
         "entity_signals": signals,
+        "preferred_display_name": ((best.get("judge") or {}).get("preferred_display_name") or brand),
     }
 
 
@@ -854,11 +1438,17 @@ def _scrape_contact_page(origin: str, raw_html: str = "", homepage_soup=None) ->
     name_from_email = re.compile(r"^([a-zA-Z]+(?:[._\-][a-zA-Z]+)+)@")
 
     def _is_valid_phone(num: str) -> bool:
-        digits = re.sub(r"\D", "", num)
+        raw = (num or "").strip()
+        digits = re.sub(r"\D", "", raw)
         if len(digits) < 10 or len(digits) > 15:
             return False
-        # skip years / pin codes / GST fragments
+        if re.search(r"\d+\.\d+\s*-\d+", raw):
+            return False
+        if re.search(r"\.\d{2}", raw) and ("-" in raw or "(" in raw):
+            return False
         if digits.startswith("20") and len(digits) <= 8:
+            return False
+        if not (raw.startswith("+") or digits.startswith(("91", "0", "6", "7", "8", "9"))):
             return False
         return True
 
@@ -1056,18 +1646,31 @@ def _scrape_contact_page(origin: str, raw_html: str = "", homepage_soup=None) ->
         _parse_html(raw_html, "Homepage / Footer")
         contact["source_pages"].append(origin)
 
-    # 2) Contact pages
-    for path in ["/contact", "/contact-us", "/contactus", "/reach-us",
-                 "/get-in-touch", "/about/contact", "/connect"]:
+    # 2) Contact pages (fast: 2 paths parallel; deep: more sequential)
+    contact_paths = (
+        ["/contact", "/contact-us"]
+        if RESEARCH_FAST
+        else ["/contact", "/contact-us", "/contactus", "/reach-us",
+              "/get-in-touch", "/about/contact", "/connect"]
+    )
+
+    def _fetch_contact(path: str):
         try:
-            resp = requests.get(origin + path, headers=HEADERS, timeout=12)
+            resp = requests.get(origin + path, headers=HEADERS, timeout=5 if RESEARCH_FAST else 12)
             if resp.status_code == 200 and len(resp.text) > 500:
-                _parse_html(resp.text, f"Contact page ({path})")
-                contact["source_pages"].append(origin + path)
-                print(f"[Contact] Scraped {path}")
+                return path, resp.text
         except Exception:
             pass
-        time.sleep(0.15)
+        return path, None
+
+    with ThreadPoolExecutor(max_workers=min(4, len(contact_paths))) as pool:
+        for path, html in pool.map(lambda p: _fetch_contact(p), contact_paths):
+            if html:
+                _parse_html(html, f"Contact page ({path})")
+                contact["source_pages"].append(origin + path)
+                print(f"[Contact] Scraped {path}")
+                if RESEARCH_FAST and (contact["emails"] or contact["phones"]):
+                    break
 
     # 3) Fallback soup if provided
     if homepage_soup and not contact["emails"] and not contact["phones"]:
@@ -1107,6 +1710,15 @@ def _fetch_page(url: str, timeout: int = 15) -> str:
         return ""
 
 
+def _scrape_one_subpage(origin: str, key: str, paths: list, timeout: int = 6) -> tuple:
+    """Try paths for one content bucket; return (key, text)."""
+    for path in paths:
+        text = _fetch_page(origin + path, timeout=timeout)
+        if len(text) > 300:
+            return key, text, path
+    return key, "", ""
+
+
 def _scrape_website(url: str) -> dict:
     """Scrape homepage + key sub-pages for maximum context."""
     from bs4 import BeautifulSoup
@@ -1126,7 +1738,15 @@ def _scrape_website(url: str) -> dict:
 
     # ── Homepage ──────────────────────────────────────────────────────
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=20, allow_redirects=True)
+        home_timeout = 12 if RESEARCH_FAST else 20
+        resp = requests.get(url, headers=HEADERS, timeout=home_timeout, allow_redirects=True)
+        if resp.status_code == 403:
+            # Some enterprise sites block datacenter UAs — retry with alternate UA
+            alt = dict(HEADERS)
+            alt["User-Agent"] = (
+                "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+            )
+            resp = requests.get(url, headers=alt, timeout=home_timeout, allow_redirects=True)
         resp.raise_for_status()
         _homepage_raw = resp.text
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -1140,6 +1760,8 @@ def _scrape_website(url: str) -> dict:
                 result["description"] = content[:600]
             if name == "keywords":
                 result["keywords"] = content[:300]
+            if prop == "og:site_name" and content:
+                result["og_site_name"] = content.strip()[:120]
 
         # Tech stack hints from scripts/links
         tech_hints = set()
@@ -1180,70 +1802,85 @@ def _scrape_website(url: str) -> dict:
     except Exception as e:
         print(f"[Research] Homepage scrape failed: {e}")
 
-    # ── Sub-pages ─────────────────────────────────────────────────────
-    sub_pages = {
-        "about_text":     ["/about", "/about-us", "/company", "/who-we-are",
-                           "/investor-relations", "/investors", "/investor"],
-        "products_text":  ["/products", "/services", "/solutions", "/platform"],
-        "pricing_text":   ["/pricing", "/plans", "/subscription"],
-        "careers_text":   ["/careers", "/jobs", "/work-with-us", "/team"],
-        "leadership_text":["/leadership", "/team", "/management", "/executive-team"],
-        "blog_text":      ["/blog", "/news", "/press", "/resources"],
-    }
-    for key, paths in sub_pages.items():
-        for path in paths:
-            text = _fetch_page(origin + path, timeout=12)
-            if len(text) > 300:
-                result[key] = text
-                print(f"[Research] Scraped sub-page: {path} ({len(text)} chars)")
-                break
-        time.sleep(0.2)
+    # Detect WAF / bot-block pages — these poison brand naming if used as title
+    result["_scrape_blocked"] = _is_blocked_page_text(
+        result.get("title") or "", result.get("homepage_text") or ""
+    )
+    if result["_scrape_blocked"]:
+        brand = _brand_from_domain(parsed.netloc.replace("www.", ""))
+        print(f"[Research] Homepage looks blocked/WAF — anchoring brand to '{brand}'")
+        result["title"] = brand
+        if not result.get("description"):
+            result["description"] = f"{brand} corporate website ({parsed.netloc})"
+        # Prefer og:site_name when present and not blocked
+        og = (result.get("og_site_name") or "").strip()
+        if og and not _is_blocked_page_text(og, "") and _name_matches_domain(og, parsed.netloc):
+            result["title"] = og
+
+    # ── Sub-pages (parallel; fewer buckets in fast mode) ──────────────
+    if RESEARCH_FAST:
+        sub_pages = {
+            "about_text":     ["/about", "/about-us", "/company", "/investor-relations", "/investors"],
+            "products_text":  ["/products", "/services", "/solutions", "/platform"],
+            "careers_text":   ["/careers", "/jobs"],
+            "leadership_text":["/leadership", "/team", "/management", "/board-of-directors"],
+        }
+        sub_timeout = 5
+    else:
+        sub_pages = {
+            "about_text":     ["/about", "/about-us", "/company", "/who-we-are",
+                               "/investor-relations", "/investors", "/investor"],
+            "products_text":  ["/products", "/services", "/solutions", "/platform"],
+            "pricing_text":   ["/pricing", "/plans", "/subscription"],
+            "careers_text":   ["/careers", "/jobs", "/work-with-us", "/team"],
+            "leadership_text":["/leadership", "/team", "/management", "/executive-team"],
+            "blog_text":      ["/blog", "/news", "/press", "/resources"],
+        }
+        sub_timeout = 10
+
+    with ThreadPoolExecutor(max_workers=min(6, len(sub_pages))) as pool:
+        futures = [
+            pool.submit(_scrape_one_subpage, origin, key, paths, sub_timeout)
+            for key, paths in sub_pages.items()
+        ]
+        for fut in as_completed(futures):
+            try:
+                key, text, path = fut.result()
+                if text:
+                    result[key] = text
+                    print(f"[Research] Scraped sub-page: {path} ({len(text)} chars)")
+            except Exception as e:
+                print(f"[Research] sub-page fail: {e}")
 
     # ── Contact page — deep extraction from RAW HTML (footer intact) ──
     result["contact_data"] = _scrape_contact_page(origin, raw_html=_homepage_raw)
     print(f"[Research] Contact: {len(result['contact_data'].get('emails',[]))} emails, "
           f"{len(result['contact_data'].get('phones',[]))} phones")
 
-    # ── Wikipedia ─────────────────────────────────────────────────────
-    try:
-        domain_name = urlparse(url).netloc.replace("www.","").split(".")[0]
-        wiki_url = f"https://en.wikipedia.org/wiki/{domain_name.title()}"
-        wiki_text = _fetch_page(wiki_url, timeout=10)
-        if len(wiki_text) > 500:
-            result["wikipedia_text"] = wiki_text[:4000]
-            print(f"[Research] Wikipedia scraped: {len(wiki_text)} chars")
-        else:
-            result["wikipedia_text"] = ""
-    except Exception:
-        result["wikipedia_text"] = ""
+    # Wikipedia for leadership / HQ (faithful public source)
+    brand_for_wiki = _brand_from_domain(parsed.netloc.replace("www.", ""))
+    title0 = (result.get("title") or "").strip()
+    if title0 and not _is_blocked_page_text(title0, ""):
+        brand_for_wiki = re.split(r"[|\-—–:]", title0)[0].strip() or brand_for_wiki
+    wiki = _fetch_wikipedia_text(brand_for_wiki, parsed.netloc.replace("www.", ""))
+    result["wikipedia_text"] = wiki.get("text") or ""
+    result["wikipedia_url"] = wiki.get("url") or ""
+    result["wikipedia_summary"] = wiki.get("summary") or ""
+    result["wikipedia_description"] = wiki.get("description") or ""
 
-    # ── ZaubaCorp (MCA) — entity resolution (CIN / legal name / validation) ──
+    # Skip CIN / Zauba entirely — global public-web research only
     result["zaubacorp_text"] = ""
     result["zaubacorp_url"] = ""
     result["zaubacorp_structured"] = {}
     result["zauba_match_confidence"] = "Low"
     result["zauba_match_score"] = 0
-    result["zauba_match_reason"] = ""
+    result["zauba_match_reason"] = "CIN/MCA disabled — website + public web only"
     result["zauba_alternatives"] = []
     result["entity_signals"] = {}
-    try:
-        mca = _resolve_mca_entity(result, url, raw_html=_homepage_raw)
-        result["entity_signals"] = mca.get("entity_signals") or {}
-        result["zauba_match_score"] = mca.get("match_score") or 0
-        result["zauba_match_confidence"] = mca.get("match_confidence") or "Low"
-        result["zauba_match_reason"] = mca.get("match_reason") or ""
-        result["zauba_alternatives"] = mca.get("alternatives") or []
-        if mca.get("url") and mca.get("match_confidence") != "Low":
-            result["zaubacorp_text"] = mca.get("text", "")
-            result["zaubacorp_url"] = mca.get("url", "")
-            result["zaubacorp_structured"] = mca.get("structured") or {}
-            print(f"[Research] ZaubaCorp verified: {result['zaubacorp_structured'].get('Company Name')} "
-                  f"({result['zauba_match_confidence']})")
-        else:
-            print(f"[Research] ZaubaCorp skipped — no verified MCA entity "
-                  f"(best score {result['zauba_match_score']})")
-    except Exception as e:
-        print(f"[ZaubaCorp] failed: {e}")
+    result["preferred_display_name"] = ""
+    result["cin_verified"] = False
+    result["verified_cin"] = ""
+    print("[Research] CIN/MCA disabled — using website + public web only")
 
     print(f"[Research] Total website data: {sum(len(v) for v in result.values() if isinstance(v,str))} chars")
     return result
@@ -1255,12 +1892,288 @@ def _scrape_website(url: str) -> dict:
 
 def _ddg_search(query: str, max_results: int = 8) -> list:
     try:
-        from duckduckgo_search import DDGS
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             return list(ddgs.text(query, max_results=max_results))
     except Exception as e:
         print(f"[Research] DDG failed for '{query}': {e}")
         return []
+
+
+def _is_valid_phone(num: str) -> bool:
+    """Reject stock ticks / decimals / too-short fragments mistaken as phones."""
+    raw = (num or "").strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) < 10 or len(digits) > 15:
+        return False
+    # Stock quotes like "522.90 -4.10 (-0.78)"
+    if re.search(r"\.\d{2}", raw) and ("-" in raw or "(" in raw or "%" in raw):
+        return False
+    if raw.count(".") >= 1 and raw.count("-") >= 1 and len(digits) <= 12:
+        # decimal price movement patterns
+        if re.search(r"\d+\.\d+\s*-\d+", raw):
+            return False
+    if digits.startswith("20") and len(digits) <= 8:
+        return False
+    # Must look like a phone (starts with + / 0 / 91 / Indian mobile 6-9)
+    if not (raw.startswith("+") or digits.startswith(("91", "0", "6", "7", "8", "9"))):
+        return False
+    return True
+
+
+def _email_domain_ok(email: str, company_domain: str) -> bool:
+    """Prefer company-domain emails; drop obvious unrelated corporate domains."""
+    em = (email or "").lower().strip()
+    if not em or "@" not in em:
+        return False
+    edom = em.split("@")[-1]
+    cdom = (company_domain or "").lower().replace("www.", "")
+    stem = cdom.split(".")[0] if cdom else ""
+    # Always allow same domain / subdomain
+    if cdom and (edom == cdom or edom.endswith("." + cdom) or stem and stem in edom):
+        return True
+    # Common public freemail — keep as low-confidence contact ok
+    if edom in _GENERIC_EMAIL_DOMAINS:
+        return True
+    # Reject other companies' domains (e.g. 9xmedia.in for saregama.com)
+    blocked_foreign = (
+        "9xmedia", "keka.com", "googlemail", "example.com",
+    )
+    if any(b in edom for b in blocked_foreign):
+        return False
+    # If we have a company stem, require stem appear in email domain OR it's a known free mail
+    if stem and len(stem) >= 4 and stem not in edom:
+        # allow investor/holding domains containing brand later; for now require stem
+        return False
+    return True
+
+
+def _fetch_wikipedia_text(company_name: str, domain: str = "") -> dict:
+    """Fetch clean Wikipedia summary (API) + page text for leadership/HQ facts."""
+    out = {
+        "text": "", "url": "", "title": "",
+        "summary": "", "description": "",
+    }
+    queries = [
+        f"site:en.wikipedia.org {company_name}",
+        f"site:en.wikipedia.org {company_name} company",
+    ]
+    if domain:
+        queries.append(f"site:en.wikipedia.org {domain.split('.')[0]}")
+    wiki_url = ""
+    for q in queries:
+        for r in _ddg_search(q, max_results=4):
+            href = r.get("href") or ""
+            if "wikipedia.org/wiki/" in href.lower() and ":" not in href.split("/wiki/")[-1]:
+                wiki_url = href.split("#")[0]
+                break
+        if wiki_url:
+            break
+    title_guess = ""
+    if wiki_url:
+        title_guess = wiki_url.rstrip("/").split("/")[-1]
+    elif domain:
+        title_guess = _brand_from_domain(domain).replace(" ", "_")
+
+    # Prefer REST summary — clean prose, no nav chrome
+    if title_guess:
+        try:
+            api = f"https://en.wikipedia.org/api/rest_v1/page/summary/{title_guess}"
+            resp = requests.get(api, headers=HEADERS, timeout=8)
+            if resp.ok:
+                data = resp.json() or {}
+                extract = (data.get("extract") or "").strip()
+                desc = (data.get("description") or "").strip()
+                page_url = ((data.get("content_urls") or {}).get("desktop") or {}).get("page") or ""
+                if extract and len(extract) > 80:
+                    out["summary"] = extract[:1200]
+                    out["description"] = desc[:200]
+                    out["url"] = page_url or wiki_url or api
+                    out["title"] = (data.get("title") or title_guess).replace("_", " ")
+                    out["text"] = extract[:8000]
+                    print(f"[Research] Wikipedia summary API: {out['url']} ({len(extract)} chars)")
+        except Exception as e:
+            print(f"[Research] Wikipedia summary API failed: {e}")
+
+    if not wiki_url and out.get("url"):
+        wiki_url = out["url"]
+    if not wiki_url and not out.get("summary"):
+        return out
+
+    # Extra page text for leadership parsing when summary alone is thin
+    if wiki_url and len(out.get("text") or "") < 500:
+        raw = _fetch_page(wiki_url, timeout=8)
+        if raw and (
+            company_name.split()[0].lower() in raw.lower()
+            or _domain_stem(domain) in raw.lower()
+        ):
+            out["text"] = ((out.get("summary") or "") + "\n" + raw)[:8000]
+            out["url"] = out.get("url") or wiki_url
+            if not out.get("summary"):
+                cleaned = _clean_snippet(raw, max_len=600)
+                if cleaned:
+                    out["summary"] = cleaned
+            print(f"[Research] Wikipedia page: {wiki_url} ({len(out['text'])} chars)")
+    elif wiki_url and not out.get("url"):
+        out["url"] = wiki_url
+
+    blob = (out.get("summary") or out.get("text") or "").lower()
+    if blob and company_name.split()[0].lower() not in blob and _domain_stem(domain) not in blob:
+        return {"text": "", "url": "", "title": "", "summary": "", "description": ""}
+    return out
+
+
+def _wiki_product_hints(text: str) -> list:
+    """Extract product/service names only when sources explicitly list them."""
+    if not text:
+        return []
+    found = []
+    patterns = [
+        r"(?i)(?:products?(?:\s+and\s+services)?|services|offerings?|portfolio)\s+(?:include|includes|are|span)\s+([^.]+)",
+        r"(?i)(?:best known for|known for)\s+([^.]+)",
+        r"(?i)(?:develops?|sells?|offers?|provides?)\s+([^.]+)",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text)
+        if not m:
+            continue
+        chunk = m.group(1)
+        for part in re.split(r",|;| and | & |\n|•", chunk):
+            part = re.sub(r"\s+", " ", part).strip(" .")
+            part = re.sub(r"(?i)^(such as|including|like)\s+", "", part)
+            if 3 < len(part) < 55 and not _is_illogical_text(part):
+                if part[0].isupper() or any(c.isupper() for c in part[1:]):
+                    found.append(part)
+            if len(found) >= 8:
+                break
+        if len(found) >= 6:
+            break
+    return found[:6]
+
+
+def _parse_leadership_from_text(text: str, source: str, company_name: str = "") -> list:
+    """Extract founder/CEO/MD/chairman mentions from source text — never invent."""
+    if not text:
+        return []
+    leaders = []
+    seen = set()
+    # Roles matched case-insensitively; person names stay Title Case (no re.I on names).
+    role_words = (
+        r"CEO|Chief Executive Officer|Managing Director|MD|Chairman|Chairperson|"
+        r"Vice Chairperson|Vice Chairman|Founder|Co-Founder|Executive Director|"
+        r"Whole[- ]time Director|Director"
+    )
+    patterns = [
+        r"(?:founded by|Founded by|founder[s]?|co-?founders?)\s*[:\-]?\s*([A-Z][a-zA-Z.'\-]+(?:\s+[A-Z][a-zA-Z.'\-]+){1,3})",
+        rf"([A-Z][a-zA-Z.'\-]+(?:\s+[A-Z][a-zA-Z.'\-]+){{1,3}})\s*(?:is|was|serves as|,)\s+(?:the\s+)?(?i:{role_words})\b",
+        rf"(?i:{role_words})\s*[:\-]\s*([A-Z][a-zA-Z.'\-]+(?:\s+[A-Z][a-zA-Z.'\-]+){{1,3}})",
+        # Wikipedia infobox: Name ( managing director )
+        rf"([A-Z][a-zA-Z.'\-]+(?:\s+[A-Z][a-zA-Z.'\-]+){{1,3}})\s*\(\s*(?i:{role_words})\s*\)",
+    ]
+    role_aliases = {
+        "ceo", "md", "chairman", "chairperson", "founder", "co-founder",
+        "managing director", "chief executive officer", "executive director",
+        "whole-time director", "whole time director", "vice chairperson",
+        "vice chairman", "director",
+    }
+    for pat in patterns:
+        for m in re.finditer(pat, text):
+            groups = [g for g in m.groups() if g]
+            # full match may include role via (?i:...) non-capturing — find role from match text
+            full = m.group(0)
+            name = groups[0].strip() if groups else ""
+            role = "Leadership"
+            # Prefer explicit role capture if present
+            if len(groups) >= 2:
+                a, b = groups[0].strip(), groups[1].strip()
+                if a.lower() in role_aliases:
+                    role, name = a, b
+                elif b.lower() in role_aliases:
+                    name, role = a, b
+                else:
+                    name, role = a, b
+            else:
+                rm = re.search(rf"(?i:{role_words})", full)
+                if rm:
+                    role = rm.group(0)
+            name = re.sub(r"\s+", " ", name).strip(" ,;.|")
+            name = re.sub(r"\.+$", "", name).strip()
+            role = re.sub(r"\s+", " ", role).strip()
+            key = name.lower()
+            if key in seen or len(name) < 5 or len(name) > 60:
+                continue
+            if company_name and company_name.lower() in key:
+                continue
+            if any(w in key for w in (
+                "limited", "private", "company", "india", "wikipedia", "click",
+                "founded", "director", "managing", "chairman", "officer",
+                "products", "services", "portable", "key people",
+            )):
+                continue
+            toks = name.split()
+            if not (2 <= len(toks) <= 4) or not all(t[:1].isupper() for t in toks):
+                continue
+            seen.add(key)
+            leaders.append({
+                "name": name,
+                "role": role.title() if len(role) <= 40 else role[:40],
+                "source": source,
+                "confidence": "High" if "wikipedia" in source.lower() else "Medium",
+                "background": f"Mentioned in {source}",
+            })
+    return leaders[:8]
+
+
+def _collect_leadership(company_name: str, domain: str, scraped: dict, intel: dict) -> list:
+    """Gather leadership ONLY from scraped public sources (Wikipedia, about, leadership page)."""
+    leaders = []
+    # Website pages
+    for key, label in (
+        ("leadership_text", "Company leadership page"),
+        ("about_text", "Company about page"),
+        ("homepage_text", "Company website"),
+    ):
+        leaders.extend(_parse_leadership_from_text(scraped.get(key) or "", label, company_name))
+
+    # Wikipedia
+    wiki = scraped.get("wikipedia_text") or ""
+    wiki_url = scraped.get("wikipedia_url") or ""
+    if wiki:
+        leaders.extend(_parse_leadership_from_text(wiki, wiki_url or "Wikipedia", company_name))
+
+    # Public scrape digest / CEO snippets
+    leaders.extend(_parse_leadership_from_text(intel.get("ceo_founder") or "", "Public web", company_name))
+    for page in intel.get("_scraped_pages") or []:
+        cat = (page.get("category") or "").lower()
+        if any(k in cat for k in ("encyclopedia", "company profile", "news", "financial")):
+            leaders.extend(_parse_leadership_from_text(
+                page.get("text") or "", page.get("domain") or "Public web", company_name
+            ))
+
+    # Targeted search snippets for CEO/founder (faithful — titles/snippets only)
+    for q in [
+        f'"{company_name}" CEO',
+        f'"{company_name}" Managing Director',
+        f'"{company_name}" founder',
+    ][:2]:
+        for r in _ddg_search(q, max_results=3):
+            blob = f"{r.get('title','')} {r.get('body','')}"
+            src = urlparse(r.get("href") or "").netloc.replace("www.", "") or "Web search"
+            leaders.extend(_parse_leadership_from_text(blob, src, company_name))
+
+    # Dedup by name
+    out, seen = [], set()
+    for l in leaders:
+        key = (l.get("name") or "").lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(l)
+    print(f"[Research] Leadership extracted: {len(out)} people")
+    return out[:6]
 
 
 def _snippets(results: list, max_chars: int = 2000) -> str:
@@ -1269,7 +2182,6 @@ def _snippets(results: list, max_chars: int = 2000) -> str:
 
 
 PUBLIC_SOURCE_SITES = [
-    ("zaubacorp.com", "MCA / Company Registry"),
     ("tofler.in", "Financial / Directors"),
     ("ambitionbox.com", "Employee Reviews"),
     ("glassdoor.", "Employee Reviews"),
@@ -1324,8 +2236,10 @@ def _extract_contacts_from_text(text: str, source_label: str) -> dict:
         })
     for m in name_phone.finditer(text or ""):
         name, num = m.group(1).strip(), m.group(2).strip()
+        if not _is_valid_phone(num):
+            continue
         digits = re.sub(r"\D", "", num)
-        if len(digits) < 10 or digits in seen_p:
+        if digits in seen_p:
             continue
         seen_p.add(digits)
         phones.append({
@@ -1334,10 +2248,10 @@ def _extract_contacts_from_text(text: str, source_label: str) -> dict:
         })
     for m in phone_pat.finditer(text or ""):
         num = m.group(0).strip()
-        digits = re.sub(r"\D", "", num)
-        if len(digits) < 10 or len(digits) > 15 or digits in seen_p:
+        if not _is_valid_phone(num):
             continue
-        if not (num.startswith("+") or digits.startswith(("91", "0", "6", "7", "8", "9"))):
+        digits = re.sub(r"\D", "", num)
+        if digits in seen_p:
             continue
         seen_p.add(digits)
         phones.append({
@@ -1351,23 +2265,31 @@ def _mcp_discover_urls(company_name: str, domain: str) -> list:
     """Search Agent — find public URLs across many websites (fast path)."""
     print(f"[MCP Search] Discovering public sources for '{company_name}'...")
     found, seen = [], set()
-    # Prioritized queries — fewer + faster than full sweep
-    site_queries = [
-        f"site:zaubacorp.com {company_name}",
-        f"site:tofler.in {company_name}",
-        f"site:ambitionbox.com {company_name}",
-        f"site:glassdoor.co.in {company_name}",
-        f"site:linkedin.com/company {company_name}",
-        f"site:justdial.com {company_name}",
-        f"site:indiamart.com {company_name}",
-        f"site:economictimes.indiatimes.com {company_name}",
-        f"{company_name} {domain} contact email phone",
-        f"{company_name} directors CIN India",
-        f"{company_name} competitors",
-        f"{company_name} news funding",
-    ]
-    for q in site_queries:
-        for r in _ddg_search(q, max_results=3):
+    if RESEARCH_FAST:
+        site_queries = [
+            f'"{company_name}" company overview',
+            f"{company_name} competitors",
+            f'site:en.wikipedia.org "{company_name}"',
+            f'"{company_name}" CEO OR "Managing Director" OR founder',
+            f"site:linkedin.com/company {company_name}",
+        ]
+        max_results = 3
+    else:
+        site_queries = [
+            f'"{company_name}" company overview',
+            f"site:linkedin.com/company {company_name}",
+            f"site:opencorporates.com {company_name}",
+            f"{company_name} {domain} competitors",
+            f"{company_name} news",
+            f"site:crunchbase.com {company_name}",
+            f'site:en.wikipedia.org "{company_name}"',
+            f'"{company_name}" CEO OR "Managing Director" OR founder',
+        ]
+        max_results = 3
+
+    def _one_query(q: str) -> list:
+        rows = []
+        for r in _ddg_search(q, max_results=max_results):
             href = r.get("href") or r.get("link") or ""
             if not href.startswith("http"):
                 continue
@@ -1375,47 +2297,77 @@ def _mcp_discover_urls(company_name: str, domain: str) -> list:
                 d = urlparse(href).netloc.replace("www.", "").lower()
             except Exception:
                 continue
-            if not d or d in seen:
+            if not d:
                 continue
-            if any(x in d for x in ("google.", "youtube.com", "duckduckgo")):
+            if any(x in d for x in (
+                "google.", "youtube.com", "duckduckgo", "zaubacorp.com",
+                "chatgpt.com", "chat.openai.com", "openai.com/chat",
+                "accounts.google", "login.microsoftonline",
+            )):
                 continue
-            seen.add(d)
-            found.append({
+            rows.append({
                 "title": (r.get("title") or d)[:80],
                 "url": href,
                 "category": _site_category(href),
                 "domain": d,
                 "snippet": (r.get("body") or "")[:300],
             })
-        time.sleep(0.12)
+        return rows
+
+    with ThreadPoolExecutor(max_workers=min(4, len(site_queries))) as pool:
+        for rows in pool.map(_one_query, site_queries):
+            for item in rows:
+                d = item.get("domain")
+                if not d or d in seen:
+                    continue
+                seen.add(d)
+                found.append(item)
+
     print(f"[MCP Search] Discovered {len(found)} unique public domains")
     return found
 
 
 def _mcp_scrape_sources(discovered: list, company_domain: str, max_pages: int = 12) -> list:
-    """Scrape Agent — visit each public URL and extract text + contacts."""
+    """Scrape Agent — visit each public URL and extract text + contacts. Skip junk/login pages."""
+    from backend.services.llm_judge import is_junk_page_text
     print(f"[MCP Scrape] Visiting up to {max_pages} public websites...")
     scraped_pages = []
     priority, rest = [], []
     for item in discovered:
         cat = item.get("category", "")
-        if any(k in cat for k in ("Registry", "Reviews", "Contacts", "Financial", "Company Profile", "B2B")):
+        url_l = (item.get("url") or "").lower()
+        if any(x in url_l for x in ("keka.com", "/login", "signin", "accounts.google", "zaubacorp.com")):
+            continue
+        if any(k in cat for k in ("Registry", "Reviews", "Contacts", "Financial", "Company Profile", "B2B", "News")):
             priority.append(item)
         else:
             rest.append(item)
-    for item in (priority + rest)[:max_pages]:
-        url = item["url"]
+
+    candidates = []
+    for item in (priority + rest):
         if company_domain and company_domain in (item.get("domain") or ""):
             continue
+        candidates.append(item)
+        if len(candidates) >= max_pages * 2:
+            break
+
+    page_timeout = 4 if RESEARCH_FAST else 8
+
+    def _scrape_one(item: dict) -> dict | None:
+        url = item["url"]
         try:
-            text = _fetch_page(url, timeout=8)
-            if len(text) < 200:
-                print(f"[MCP Scrape] skip (thin): {item.get('domain')}")
-                continue
+            text = _fetch_page(url, timeout=page_timeout)
+            if len(text) < 200 or is_junk_page_text(text, url):
+                print(f"[MCP Scrape] skip (thin/junk): {item.get('domain')}")
+                return None
             contacts = _extract_contacts_from_text(
                 text, f"{item.get('domain')} ({item.get('category')})"
             )
-            scraped_pages.append({
+            print(
+                f"[MCP Scrape] OK {item.get('domain')} — {len(text)} chars, "
+                f"{len(contacts['emails'])}e/{len(contacts['phones'])}p"
+            )
+            return {
                 "title": item.get("title", ""),
                 "url": url,
                 "domain": item.get("domain", ""),
@@ -1425,14 +2377,24 @@ def _mcp_scrape_sources(discovered: list, company_domain: str, max_pages: int = 
                 "emails": contacts["emails"],
                 "phones": contacts["phones"],
                 "favicon": f"https://www.google.com/s2/favicons?domain={item.get('domain','')}&sz=64",
-            })
-            print(f"[MCP Scrape] OK {item.get('domain')} — {len(text)} chars, "
-                  f"{len(contacts['emails'])}e/{len(contacts['phones'])}p")
+            }
         except Exception as e:
             print(f"[MCP Scrape] fail {item.get('domain')}: {e}")
-        time.sleep(0.15)
+            return None
+
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(candidates)))) as pool:
+        futures = [pool.submit(_scrape_one, item) for item in candidates]
+        for fut in as_completed(futures):
+            page = fut.result()
+            if page:
+                scraped_pages.append(page)
+            if len(scraped_pages) >= max_pages:
+                for other in futures:
+                    other.cancel()
+                break
+
     print(f"[MCP Scrape] Successfully scraped {len(scraped_pages)} public sites")
-    return scraped_pages
+    return scraped_pages[:max_pages]
 
 
 def _collect_intelligence(company_name: str, domain: str) -> dict:
@@ -1456,7 +2418,9 @@ def _collect_intelligence(company_name: str, domain: str) -> dict:
             "category": d.get("category", "Public Web"),
         })
 
-    scraped_pages = _mcp_scrape_sources(discovered, domain, max_pages=8)
+    scraped_pages = _mcp_scrape_sources(
+        discovered, domain, max_pages=2 if RESEARCH_FAST else 4
+    )
     intel["_scraped_pages"] = scraped_pages
 
     seen_e, seen_p = set(), set()
@@ -1519,37 +2483,36 @@ def _collect_intelligence(company_name: str, domain: str) -> dict:
 # PHASE 3 — Prompt + Analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are a senior business intelligence analyst.
-Produce ACCURATE reports using ONLY the multi-source scraped data provided.
+SYSTEM_PROMPT = """You are a senior business intelligence analyst for GLOBAL company research.
+Produce ACCURATE reports using ONLY the website + public web sources provided.
 Rules:
 - Never invent people, funding rounds, or exact revenue figures.
-- Leadership ONLY from ZaubaCorp directors; website quotes are NOT executives.
+- Do NOT use Indian MCA / ZaubaCorp / CIN. Leadership only if clearly named in the provided sources (website, Wikipedia, reputable scrapes).
+- Stay faithful to sources: copy names/roles exactly as written; never guess founders or directors.
 - Cite a source domain for each fact. Output ONLY valid JSON.
 - For numeric facts (revenue, funding, headcount) missing from sources => Not publicly available.
-- CRITICAL: Never leave SWOT (any quadrant), competitors, or risk lists empty or as
-  "Not publicly available". Infer reasoned points from website + industry + public scrapes
-  and mark confidence Medium/Low when inferred."""
+- Competitors MUST be same industry / same work domain as the website. Never mix unrelated domains.
+- Do NOT invent SWOT points from login pages or unrelated HR portals.
+- If unsure about a fact, use Not publicly available with Low confidence — never guess."""
+
 
 def _build_prompt(url, company_name, scraped, intel):
     """Compact prompt — must stay under Groq free-tier TPM (~8000 tokens)."""
     def clip(s, n=600):
         return (s or "")[:n]
 
-    zauba = scraped.get("zaubacorp_structured") or {}
-    directors = zauba.get("Directors") or []
     contact = scraped.get("contact_data") or {}
 
     return f"""Company: {company_name}
 URL: {url}
 Title: {clip(scraped.get('title'), 120)}
 Description: {clip(scraped.get('description'), 300)}
-Homepage: {clip(scraped.get('homepage_text'), 900)}
-About: {clip(scraped.get('about_text'), 500)}
-Products: {clip(scraped.get('products_text'), 500)}
+Homepage: {clip(scraped.get('homepage_text'), 550 if RESEARCH_FAST else 900)}
+About: {clip(scraped.get('about_text'), 350 if RESEARCH_FAST else 500)}
+Products: {clip(scraped.get('products_text'), 350 if RESEARCH_FAST else 500)}
+Leadership page: {clip(scraped.get('leadership_text'), 250 if RESEARCH_FAST else 400)}
+Wikipedia: {clip(scraped.get('wikipedia_summary') or scraped.get('wikipedia_text'), 900 if RESEARCH_FAST else 1400)}
 Social: {', '.join((scraped.get('social_links') or [])[:6])}
-
-ZAUBACORP MCA (verified): {clip(json.dumps(zauba, ensure_ascii=False), 800)}
-Directors (use ONLY these for leadership): {clip(json.dumps(directors, ensure_ascii=False), 400)}
 
 CONTACTS already scraped (copy into contact_intelligence, do not invent):
 emails={clip(json.dumps(contact.get('emails',[])), 500)}
@@ -1557,17 +2520,16 @@ phones={clip(json.dumps(contact.get('phones',[])), 500)}
 address={clip(contact.get('address'), 200)}
 
 MULTI-SOURCE PUBLIC WEB SCRAPES (visited & scraped, not just search snippets):
-{clip(intel.get('multi_source_digest'), 3500)}
+{clip(intel.get('multi_source_digest'), 1800 if RESEARCH_FAST else 3500)}
 
 TOPIC SNIPPETS:
-competitors: {clip(intel.get('competitors_direct'), 350)}
-funding: {clip(intel.get('revenue'), 250)}
-employees: {clip(intel.get('employees'), 250)}
-reviews: {clip(intel.get('glassdoor'), 250)}
-leadership: {clip(intel.get('ceo_founder'), 250)}
-news: {clip(intel.get('news_recent'), 300)}
-market: {clip(intel.get('market_position'), 250)}
-registry: {clip(intel.get('india_registry'), 250)}
+competitors: {clip(intel.get('competitors_direct'), 250 if RESEARCH_FAST else 350)}
+funding: {clip(intel.get('revenue'), 180 if RESEARCH_FAST else 250)}
+employees: {clip(intel.get('employees'), 180 if RESEARCH_FAST else 250)}
+reviews: {clip(intel.get('glassdoor'), 180 if RESEARCH_FAST else 250)}
+leadership: {clip(intel.get('ceo_founder'), 250 if RESEARCH_FAST else 400)}
+news: {clip(intel.get('news_recent'), 200 if RESEARCH_FAST else 300)}
+market: {clip(intel.get('market_position'), 200 if RESEARCH_FAST else 250)}
 
 Return ONLY compact JSON. IMPORTANT schema rules:
 - company_profile: object with name, website, description; founded/etc as {{value,source,confidence}}
@@ -1576,47 +2538,68 @@ Return ONLY compact JSON. IMPORTANT schema rules:
 - swot_analysis: ALL 4 keys strengths/weaknesses/opportunities/threats as arrays of
   {{"point","source","confidence"}} — at least 3 points each. Never use "Not publicly available" as a point.
 - competitors: array of at least 3 objects {{"name","description","strengths","weaknesses","threat_level","source","confidence"}}
+- leadership_team: array of {{"name","role","source","confidence","background"}} ONLY for people named in Wikipedia/website/leadership sources above — empty array if none named
 - risk_assessment: overall_risk_level string + regulatory/competitive/operational/reputational_risks as arrays of {{"risk","source","confidence"}}
-- financial_data: use ZaubaCorp capital when present; revenue only if found in scrapes
+- financial_data: revenue/funding only if found in scrapes; else Not publicly available
 - recent_news: array of objects; intelligence_score: {{"overall","data_completeness","source_reliability","summary"}}
 Do NOT wrap whole sections in a single {{value,source,confidence}} object.
-Leadership ONLY from ZaubaCorp directors. Never invent exact revenue/funding numbers."""
+Never invent people or exact revenue/funding numbers. No CIN / MCA fields."""
 
 
 def _analyze_with_llm(prompt: str) -> dict:
-    """Analyze scraped intel with Azure OpenAI (primary) / Groq / Gemini."""
+    """Analyze scraped intel with Azure OpenAI (production primary)."""
     safe_prompt = (
-        "No invented people/revenue. Leadership only from ZaubaCorp directors. "
-        "SWOT, competitors, and risks must always be filled (infer with Medium/Low confidence if needed). "
-        "Copy scraped contacts exactly. Return ONLY valid JSON.\n\n"
+        "No invented people/revenue. Leadership only from website or clear public sources. "
+        "Do not use Indian MCA / ZaubaCorp. Competitors must match the company's actual domain of work. "
+        "Never cite ChatGPT sign-in pages or UI chrome. If unsure, use Not publicly available. "
+        "Return ONLY valid JSON.\n\n"
         + prompt
     )
-    if len(safe_prompt) > 14000:
-        safe_prompt = safe_prompt[:14000]
+    # Azure gpt-5 / research prompts can be longer than Groq free tier
+    if len(safe_prompt) > 16000:
+        safe_prompt = safe_prompt[:16000]
 
-    raw = llm_client.chat(
-        [
-            {"role": "system", "content": SYSTEM_PROMPT[:900]},
-            {"role": "user",   "content": safe_prompt},
-        ],
-        temperature=0.2,
-        max_tokens=2500,
-        json_mode=True,
-    )
+    max_tok = 4000 if RESEARCH_FAST else 5000
+    llm_timeout = 90.0 if RESEARCH_FAST else 150.0
+
+    def _call(prompt_text: str) -> str:
+        return llm_client.chat(
+            [
+                {"role": "system", "content": SYSTEM_PROMPT[:1200]},
+                {"role": "user", "content": prompt_text},
+            ],
+            temperature=0.15,
+            max_tokens=max_tok,
+            json_mode=True,
+            timeout=llm_timeout,
+        )
+
+    def _parse(raw_text: str) -> dict:
+        text = re.sub(r"^```(?:json)?", "", (raw_text or ""), flags=re.MULTILINE).strip()
+        text = re.sub(r"```$", "", text, flags=re.MULTILINE).strip()
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start != -1 and end > start:
+            text = text[start:end]
+        return json.loads(text)
+
+    raw = _call(safe_prompt)
     print(f"[Research] LLM raw response: {len(raw)} chars")
-
-    raw = re.sub(r"^```(?:json)?", "", raw, flags=re.MULTILINE).strip()
-    raw = re.sub(r"```$",          "", raw, flags=re.MULTILINE).strip()
-    start = raw.find("{")
-    end   = raw.rfind("}") + 1
-    if start != -1 and end > start:
-        raw = raw[start:end]
-
     try:
-        return json.loads(raw)
+        return _parse(raw)
     except json.JSONDecodeError as e:
-        print(f"[Research] JSON parse error: {e}")
-        return {"error": f"JSON parse failed: {e}", "raw": raw[:2000]}
+        print(f"[Research] JSON parse error: {e} — retrying compact prompt")
+        retry = (
+            "Return ONLY valid compact JSON for this company research. "
+            "Keep SWOT to 2 points each. Max 4 competitors. No trailing commas.\n\n"
+            + safe_prompt[:8000]
+        )
+        try:
+            raw2 = _call(retry)
+            return _parse(raw2)
+        except Exception as e2:
+            print(f"[Research] JSON retry failed: {e2}")
+            return {"error": f"JSON parse failed: {e}", "raw": (raw or "")[:2000]}
 
 
 def _analyze_with_groq(prompt: str) -> dict:
@@ -1627,52 +2610,73 @@ def _analyze_with_groq(prompt: str) -> dict:
 def _baseline_report(url, company_name, scraped) -> dict:
     """Scrape-only report when Groq fails — contacts still included."""
     cd = scraped.get("contact_data") or {}
-    zauba = scraped.get("zaubacorp_structured") or {}
     return {
         "company_profile": {
             "name": company_name,
             "website": url,
             "description": scraped.get("description") or (scraped.get("homepage_text") or "")[:280],
             "founded": {
-                "value": zauba.get("Date of Incorporation") or "Not publicly available",
-                "source": "ZaubaCorp" if zauba.get("Date of Incorporation") else "Website",
-                "confidence": "High" if zauba.get("Date of Incorporation") else "Low",
+                "value": "Not publicly available",
+                "source": "Website",
+                "confidence": "Low",
             },
             "headquarters": {
-                "value": zauba.get("Registered Address") or cd.get("address") or "Not publicly available",
-                "source": "ZaubaCorp/Website", "confidence": "Medium",
+                "value": cd.get("address") or "Not publicly available",
+                "source": "Website", "confidence": "Medium" if cd.get("address") else "Low",
             },
             "industry": {"value": "Not publicly available", "source": "Website", "confidence": "Low"},
-            "cin": {"value": zauba.get("CIN") or "Not publicly available", "source": "ZaubaCorp", "confidence": "High"},
-            "mca_status": {"value": zauba.get("Status") or "Not publicly available", "source": "ZaubaCorp", "confidence": "High"},
-            "authorized_capital": {"value": zauba.get("Authorized Capital") or "Not publicly available", "source": "ZaubaCorp", "confidence": "High"},
-            "paid_up_capital": {"value": zauba.get("Paid Up Capital") or "Not publicly available", "source": "ZaubaCorp", "confidence": "High"},
-            "zaubacorp_url": scraped.get("zaubacorp_url") or "",
         },
-        "products_services": {},
-        "market_analysis": {},
+        "leadership_team": _collect_leadership(company_name, urlparse(url).netloc.replace("www.", ""), scraped, {}),
+        "contact_intelligence": {
+            "emails": cd.get("emails") or [],
+            "phones": [p for p in (cd.get("phones") or []) if _is_valid_phone(p.get("number") or "")],
+            "registered_address": cd.get("address") or "",
+        },
         "competitors": [],
-        "financial_data": {},
-        "employee_insights": {},
-        "leadership_team": [
-            {"name": d.get("name", ""), "role": d.get("designation") or "Director",
-             "source": "ZaubaCorp", "confidence": "High"}
-            for d in (zauba.get("Directors") or []) if isinstance(d, dict)
-        ],
-        "recent_news": [],
-        "social_media": {},
-        "tech_stack": {"note": "Website technology only"},
-        "swot_analysis": {},
-        "content_strategy": {},
-        "risk_assessment": {},
-        "contact_intelligence": {},
+        "swot_analysis": {"strengths": [], "weaknesses": [], "opportunities": [], "threats": []},
         "intelligence_score": {
-            "overall": 40, "data_completeness": 35, "source_reliability": 70,
-            "verified_fields_count": len(cd.get("emails", [])) + len(cd.get("phones", [])),
-            "estimated_fields_count": 0, "unverified_fields_count": 0,
-            "summary": "Partial report from web scrape (AI analysis rate-limited or unavailable).",
+            "overall": 40,
+            "data_completeness": 30,
+            "source_reliability": 50,
+            "summary": "Baseline scrape report (LLM unavailable).",
         },
+        "ai_conclusion": f"Public scrape baseline for {company_name}.",
+        "signals_used": [],
+        "hiring_signals": [],
     }
+
+
+def _is_india_subsidiary_for_global_site(legal_name: str, domain: str, site_title: str = "") -> bool:
+    """
+    True when MCA entity is an India local arm, but researched website is the global brand
+    (e.g. microsoft.com → Microsoft Corporation (India) Pvt Ltd).
+    MCA directors are REAL for that India entity — NOT global company leadership (CEO/board).
+    """
+    legal = (legal_name or "").upper()
+    if not legal:
+        return False
+    dom = (domain or "").lower().replace("www.", "")
+    if dom.endswith(".in") or ".co.in" in dom:
+        return False  # Indian site → India entity is appropriate
+
+    has_india_in_name = bool(re.search(r"\bINDIA\b", legal)) or "(INDIA)" in legal
+    global_stems = {
+        "microsoft", "google", "amazon", "apple", "meta", "facebook", "ibm",
+        "oracle", "salesforce", "adobe", "intel", "nvidia", "netflix", "uber",
+        "airbnb", "spotify", "twitter", "x", "linkedin", "github", "samsung",
+        "sony", "cisco", "dell", "hp", "huawei", "tiktok", "bytedance",
+    }
+    stem = dom.split(".")[0]
+    is_global_brand_site = stem in global_stems
+
+    if is_global_brand_site and has_india_in_name:
+        return True
+    if is_global_brand_site and ("PRIVATE LIMITED" in legal or "PVT" in legal):
+        # Global brand site matched an India Pvt Ltd entity
+        return True
+    if has_india_in_name and is_global_brand_site:
+        return True
+    return False
 
 
 def _field(value, source="Website", confidence="Medium"):
@@ -1824,9 +2828,6 @@ def _heuristic_swot(scraped: dict, intel: dict, company_name: str = "") -> dict:
     if (scraped.get("contact_data") or {}).get("emails") or (scraped.get("contact_data") or {}).get("phones"):
         strengths.append({"point": "Public contact channels (email/phone) listed for enquiries",
                           "source": "Homepage / Footer", "confidence": "High"})
-    if scraped.get("zaubacorp_structured"):
-        strengths.append({"point": "Registered entity with MCA/registry details publicly verifiable",
-                          "source": "ZaubaCorp", "confidence": "High"})
     if not strengths:
         strengths.append({"point": f"{name} maintains an active public website and brand presence",
                           "source": "Company Website", "confidence": "Medium"})
@@ -1836,8 +2837,6 @@ def _heuristic_swot(scraped: dict, intel: dict, company_name: str = "") -> dict:
          "source": "Website scan", "confidence": "High"} if not scraped.get("pricing_text") else None,
         {"point": "Thin public employee-review footprint (Glassdoor/AmbitionBox limited)",
          "source": "Public web scrape", "confidence": "Medium"} if len(reviews) < 80 else None,
-        {"point": "MCA/registry page not auto-matched — filings harder to verify instantly",
-         "source": "ZaubaCorp search", "confidence": "Medium"} if not scraped.get("zaubacorp_structured") else None,
         {"point": "Public financials (revenue/profit) largely undisclosed vs listed peers",
          "source": "Public web scrape", "confidence": "Medium"},
         {"point": "Limited third-party news coverage reduces brand discovery outside owned channels",
@@ -1903,32 +2902,21 @@ def _heuristic_swot(scraped: dict, intel: dict, company_name: str = "") -> dict:
 
 
 def _extract_competitors(company_name: str, intel: dict, scraped: dict = None) -> list:
-    """Return industry-aware peer competitors (reliable for any company type)."""
+    """
+    Do NOT invent cross-domain peers.
+    Return empty here — LLM analysis + LLM-as-judge supply domain-specific competitors.
+    Keep a light search only for citation URLs.
+    """
     scraped = scraped or {}
-    ctx = _industry_context(scraped, intel)
-
-    # Still run a light search so citations include competitor pages
-    for q in [f'"{company_name}" competitors']:
+    for q in [f'"{company_name}" competitors', f'"{company_name}" vs alternatives']:
         for r in _ddg_search(q, max_results=3):
             href = r.get("href") or ""
             if href:
                 intel.setdefault("_source_urls", []).append({
                     "title": (r.get("title") or "")[:80], "url": href, "category": "Competitors",
                 })
-        time.sleep(0.1)
-
-    comps = []
-    for name, desc, threat in ctx["peers"]:
-        comps.append({
-            "name": name,
-            "description": desc,
-            "strengths": "Scale / brand recognition in the same category",
-            "weaknesses": "May compete on different segments — verify overlap",
-            "threat_level": threat,
-            "source": f"Industry peer set ({ctx['label']}) — verify vs {company_name}",
-            "confidence": "Low",
-        })
-    return comps[:6]
+        time.sleep(0.05)
+    return []
 
 
 def _clean_swot_points(items) -> list:
@@ -1952,24 +2940,298 @@ def _clean_swot_points(items) -> list:
 
 def _offerings_from_scrape(scraped: dict) -> list:
     offerings = []
+    seen = set()
+
+    def _add(item: str, source: str, conf: str = "Medium"):
+        item = re.sub(r"\s+", " ", (item or "")).strip(" .;,-")
+        if not item or len(item) < 3 or len(item) > 70:
+            return
+        if _is_illogical_text(item):
+            return
+        key = item.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        offerings.append({"item": item, "source": source, "confidence": conf})
+
+    # Wikipedia / clean summary product hints first (high signal)
+    for hint in _wiki_product_hints(
+        (scraped.get("wikipedia_summary") or "") + " " + (scraped.get("wikipedia_text") or "")
+    ):
+        _add(hint, scraped.get("wikipedia_url") or "Wikipedia", "High")
+
     text = (scraped.get("products_text") or scraped.get("homepage_text") or "")
-    # Nav links that look like services
-    skip = {"home", "about", "contact", "blog", "news", "careers", "login", "privacy"}
+    skip = {
+        "home", "about", "contact", "blog", "news", "careers", "login", "privacy",
+        "sign in", "cookie", "menu", "search",
+    }
     for link in scraped.get("nav_links") or []:
         low = link.strip().lower()
         if not low or low in skip or len(link) > 40:
             continue
-        if any(w in low for w in ("service", "design", "engineer", "consult", "solution", "project", "structural")):
-            offerings.append({"item": link.strip(), "source": "Website nav", "confidence": "Medium"})
-    if not offerings and text:
-        # pull capitalized phrases / bullet-like chunks
-        for part in re.split(r"[\n•\|]+", text)[:30]:
+        if any(w in low for w in (
+            "service", "design", "engineer", "consult", "solution", "project",
+            "product", "platform", "cloud", "software", "hardware",
+        )):
+            _add(link.strip(), "Website nav", "Medium")
+
+    if len(offerings) < 3 and text:
+        for part in re.split(r"[\n•\|]+", text)[:40]:
             part = part.strip()
-            if 8 < len(part) < 60 and part[0].isupper():
-                offerings.append({"item": part, "source": "Website", "confidence": "Low"})
+            if 8 < len(part) < 60 and part[0].isupper() and not _is_illogical_text(part):
+                _add(part, "Website", "Low")
+            if len(offerings) >= 6:
+                break
+
+    # Meta description product-ish clauses
+    desc = scraped.get("description") or ""
+    if len(offerings) < 3 and desc and not _is_illogical_text(desc):
+        for part in re.split(r",|;| and | \| ", desc):
+            part = part.strip()
+            if 4 < len(part) < 55:
+                _add(part, "Website description", "Medium")
             if len(offerings) >= 6:
                 break
     return offerings[:6]
+
+
+def _field_confidence(field) -> str:
+    if isinstance(field, dict):
+        return str(field.get("confidence") or "").lower()
+    return ""
+
+
+def _is_illogical_text(val: str) -> bool:
+    if not val:
+        return True
+    low = val.lower().strip()
+    if len(low) < 12:
+        return True
+    markers = [
+        "login to", "continue with google", "continue with microsoft",
+        "forgot password", "cookie", "captcha", "sign in",
+        "what's on your mind", "whats on your mind",
+        "create images", "ai mode", "add images", "add files",
+        "google offered in", "report inappropriate",
+        "request has been blocked", "skip to main content",
+        # Wikipedia / CMS chrome mistakenly used as market copy
+        "jump to content", "main menu", "move to sidebar", "hide navigation",
+        "random article", "contents current events", "about wikipedia",
+        "edit links", "tools tools", "appearance", "toggle the table of contents",
+        "from wikipedia, the free encyclopedia",
+        # ChatGPT / AI chat chrome — never treat as company facts
+        "chatgpt", "chat.openai", "sign up to chat", "log in to chatgpt",
+        "what can i help with", "message chatgpt", "upgrade to plus",
+    ]
+    if any(m in low for m in markers):
+        return True
+    # scraped nav garbage
+    if low.count("continue") >= 2 and "login" in low:
+        return True
+    # too many UI chrome tokens
+    ui_hits = sum(1 for t in ("store", "images", "tools", "delete", "see more", "menu", "sidebar") if t in low)
+    if ui_hits >= 3 and len(low) < 500:
+        return True
+    # Looks like a raw search-snippet dump rather than a sentence
+    if low.startswith("[") and "wikipedia" in low and "jump to" in low:
+        return True
+    return False
+
+
+def _clean_snippet(text: str, max_len: int = 280) -> str:
+    """Strip search/wiki chrome; keep a readable sentence for UI fields."""
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    if not t:
+        return ""
+    # Drop leading [domain] title crumbs + Wikipedia nav chrome first
+    t = re.sub(r"^\[.*?\]\s*", "", t)
+    t = re.sub(r"(?i)^.*?wikipedia\s*[-–|]\s*", "", t, count=1)
+    t = re.sub(r"(?i)jump to content.*?(?:hide\s*)?", " ", t)
+    t = re.sub(r"(?i)main menu.*?(?:navigation\s*)?", " ", t)
+    t = re.sub(r"(?i)move to sidebar.*?hide", " ", t)
+    t = re.sub(r"(?i)contents current events random article about wikipedia\s*", " ", t)
+    t = re.sub(r"\s+", " ", t).strip(" -–|")
+    if len(t) < 24 or _is_illogical_text(t):
+        return ""
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    out = " ".join(parts[:2]).strip()
+    return out[:max_len]
+
+
+def _score_to_int(v, default: int = 50) -> int:
+    """Normalize LLM score labels (High/Medium/Low) or numbers to 0–100."""
+    if isinstance(v, bool):
+        return default
+    if isinstance(v, (int, float)):
+        # Models sometimes return 0.6 meaning 60%
+        if 0 < float(v) <= 1:
+            return max(0, min(100, int(round(float(v) * 100))))
+        return max(0, min(100, int(round(float(v)))))
+    s = str(v or "").strip().lower()
+    mapping = {
+        "very high": 90, "high": 80, "medium": 60, "med": 60,
+        "low": 35, "very low": 20,
+    }
+    if s in mapping:
+        return mapping[s]
+    try:
+        num = float(s)
+        if 0 < num <= 1:
+            return max(0, min(100, int(round(num * 100))))
+        return max(0, min(100, int(round(num))))
+    except Exception:
+        return default
+
+
+def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -> dict:
+    """Final confidence gate — LLM judge sanitizes the report before UI sees it."""
+    from backend.services import llm_judge
+
+    domain = urlparse(url).netloc.replace("www.", "")
+    offerings = []
+    for o in ((report.get("products_services") or {}).get("primary_offerings") or [])[:6]:
+        if isinstance(o, dict):
+            offerings.append(o.get("item") or o.get("value") or "")
+        else:
+            offerings.append(str(o))
+    offerings_hint = ", ".join(x for x in offerings if x) or (scraped.get("description") or "")[:300]
+
+    verdict = llm_judge.judge_research_report(
+        website_url=url,
+        domain=domain,
+        brand_name=company_name,
+        site_excerpt=(scraped.get("about_text") or scraped.get("homepage_text") or "")[:1400],
+        offerings_hint=offerings_hint,
+        report=report,
+    )
+    print(
+        "[Judge] quality=%s drop_registry=%s leadership_keep=%s reasons=%s"
+        % (
+            verdict.get("quality_score"),
+            verdict.get("drop_registry"),
+            verdict.get("leadership_keep"),
+            str(verdict.get("rejected_reasons") or [])[:240].encode("ascii", "replace").decode("ascii"),
+        )
+    )
+
+    display = (verdict.get("display_name") or company_name or "").strip()
+    # Hard identity gate: never accept an unrelated display_name (e.g. Sevan for microsoft.com)
+    display = _anchor_company_name(display, domain, scraped)
+    if display:
+        cp = report.get("company_profile") if isinstance(report.get("company_profile"), dict) else {}
+        cp["name"] = display
+        report["company_profile"] = cp
+        company_name = display
+
+    # Industry / market position from judge when present
+    if isinstance(verdict.get("industry"), dict) and verdict["industry"].get("value"):
+        ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+        ma["industry"] = verdict["industry"]
+        report["market_analysis"] = ma
+    mp = verdict.get("market_position")
+    if isinstance(mp, dict) and mp.get("value") and not _is_illogical_text(str(mp.get("value"))):
+        ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+        ma["market_position"] = mp
+        report["market_analysis"] = ma
+    else:
+        ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+        cur = ma.get("market_position")
+        cur_val = cur.get("value") if isinstance(cur, dict) else cur
+        if _is_illogical_text(str(cur_val or "")):
+            ma["market_position"] = _field("Not publicly available", "Judge", "Low")
+            report["market_analysis"] = ma
+
+    # Competitors: judge list only (domain-specific). Drop Low-confidence generics.
+    judged_comps = []
+    brand_l = company_name.lower()
+    for c in verdict.get("competitors") or []:
+        if not isinstance(c, dict):
+            continue
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        if name.lower() == brand_l or brand_l in name.lower() or name.lower() in brand_l:
+            continue
+        conf = str(c.get("confidence") or "Medium")
+        if conf.lower() == "low":
+            continue
+        judged_comps.append({
+            "name": name,
+            "description": c.get("description") or "",
+            "strengths": c.get("strengths") or "",
+            "weaknesses": c.get("weaknesses") or "",
+            "threat_level": c.get("threat_level") or "Medium",
+            "source": c.get("source") or "Judge-validated",
+            "confidence": conf if conf in ("High", "Medium") else "Medium",
+        })
+    if judged_comps:
+        report["competitors"] = judged_comps[:6]
+
+    # Leadership / registry gates — no CIN/MCA; keep source-faithful leadership
+    report["registry_intelligence"] = {
+        "source": "disabled",
+        "confidence": "Low",
+        "message": "Public web research — leadership from company website, Wikipedia, and reputable sources only.",
+        "entity_scope": "none",
+        "directors": [],
+        "cin": "",
+    }
+    report["leadership_team"] = [
+        l for l in (report.get("leadership_team") or [])
+        if isinstance(l, dict)
+        and l.get("name")
+        and "zauba" not in str(l.get("source") or "").lower()
+        and "mca" not in str(l.get("source") or "").lower()
+        and "cin" not in str(l.get("source") or "").lower()
+        and not l.get("din")
+    ]
+    cp = report.get("company_profile") if isinstance(report.get("company_profile"), dict) else {}
+    for k in ("cin", "mca_status", "authorized_capital", "paid_up_capital", "zaubacorp_url"):
+        cp.pop(k, None)
+    report["company_profile"] = cp
+
+    if not verdict.get("leadership_keep", True):
+        # Judge asked to drop — still keep High / Wikipedia-sourced names
+        report["leadership_team"] = [
+            l for l in (report.get("leadership_team") or [])
+            if str(l.get("confidence") or "").lower() == "high"
+            or "wikipedia" in str(l.get("source") or "").lower()
+        ]
+
+    # Strip Low-confidence / MCA-sourced people
+    leaders = []
+    for ldr in report.get("leadership_team") or []:
+        if not isinstance(ldr, dict) or not ldr.get("name"):
+            continue
+        if str(ldr.get("confidence") or "").lower() == "low":
+            continue
+        if (
+            "zauba" in str(ldr.get("source") or "").lower()
+            or "mca" in str(ldr.get("source") or "").lower()
+            or ldr.get("din")
+        ):
+            continue
+        leaders.append(ldr)
+    report["leadership_team"] = leaders
+
+    # Intelligence score from judge quality
+    q = int(verdict.get("quality_score") or 40)
+    report["intelligence_score"] = {
+        "overall": q,
+        "data_completeness": min(100, q),
+        "source_reliability": 85 if not verdict.get("drop_registry") else 55,
+        "verified_fields_count": len(report.get("competitors") or []) + len(report.get("leadership_team") or []),
+        "estimated_fields_count": 0,
+        "unverified_fields_count": 0,
+        "summary": verdict.get("summary")
+        or "Judge-validated report — low-confidence / wrong-domain facts removed.",
+    }
+    report["_judge"] = {
+        "quality_score": q,
+        "rejected_reasons": verdict.get("rejected_reasons") or [],
+        "provider": "groq",
+    }
+    return report
 
 
 def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, intel: dict) -> dict:
@@ -1990,8 +3252,27 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
     if not cp.get("name") or str(cp.get("name")).strip() in ("", "None", "Company"):
         cp["name"] = company_name
     cp.setdefault("website", url)
-    if not cp.get("description"):
-        cp["description"] = scraped.get("description") or (scraped.get("homepage_text") or "")[:280]
+    # Prefer clean description — never keep homepage UI chrome / emoji junk
+    raw_desc = cp.get("description")
+    desc_v = raw_desc.get("value") if isinstance(raw_desc, dict) else raw_desc
+    scrape_desc = scraped.get("description") or ""
+    if not desc_v or _is_illogical_text(str(desc_v)):
+        if scrape_desc and not _is_illogical_text(scrape_desc):
+            cp["description"] = scrape_desc
+        else:
+            about = (scraped.get("about_text") or "")[:280]
+            if about and not _is_illogical_text(about):
+                cp["description"] = about
+            else:
+                cp["description"] = (
+                    f"{company_name} is a public company website at {urlparse(url).netloc}. "
+                    "Detailed corporate copy was limited in the scrape."
+                )
+    # Alias employees → employee_count for frontend KPIs
+    if cp.get("employees") and not cp.get("employee_count"):
+        cp["employee_count"] = cp["employees"] if isinstance(cp.get("employees"), dict) else _field(
+            cp.get("employees"), "Public web", "Medium"
+        )
     for key in ("founded", "headquarters", "industry", "employee_count", "annual_revenue",
                 "cin", "mca_status", "authorized_capital", "paid_up_capital", "roc"):
         if key in cp and not isinstance(cp.get(key), dict):
@@ -2037,7 +3318,6 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
             "target_customers": _field("Not publicly available", "Website", "Low"),
         }
     else:
-        # normalize offering items
         fixed = []
         for o in prod.get("primary_offerings") or []:
             if isinstance(o, str):
@@ -2049,25 +3329,79 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
         prod["primary_offerings"] = fixed
         report["products_services"] = prod
 
+    # Drop junk offerings; backfill from scrape/wiki if thin
+    prod = report.get("products_services") if isinstance(report.get("products_services"), dict) else {}
+    clean_offs = []
+    for o in prod.get("primary_offerings") or []:
+        item = o.get("item") if isinstance(o, dict) else str(o)
+        if item and not _is_illogical_text(str(item)):
+            clean_offs.append(o if isinstance(o, dict) else {"item": item, "source": "Website", "confidence": "Medium"})
+    if len(clean_offs) < 2:
+        for o in _offerings_from_scrape(scraped):
+            if o["item"].lower() not in {str(x.get("item") if isinstance(x, dict) else x).lower() for x in clean_offs}:
+                clean_offs.append(o)
+            if len(clean_offs) >= 6:
+                break
+    prod["primary_offerings"] = clean_offs[:6]
+    report["products_services"] = prod
+
     # ── market_analysis ──────────────────────────────────────────────
+    wiki_sum = _clean_snippet(scraped.get("wikipedia_summary") or "", 320) or ""
+    site_desc = _clean_snippet(scraped.get("description") or "", 280) or ""
+    clean_market = wiki_sum or site_desc
+
     mkt = report.get("market_analysis")
     if _looks_empty(mkt) or (isinstance(mkt, dict) and "market_position" not in mkt and "industry" not in mkt):
-        desc = scraped.get("description") or ""
+        industry_hint = scraped.get("wikipedia_description") or (site_desc.split(".")[0] if site_desc else "")
         report["market_analysis"] = {
-            "industry": _field(desc.split(".")[0] if desc else "Not publicly available", "Website", "Medium"),
+            "industry": _field(
+                industry_hint or "Not publicly available",
+                "Wikipedia" if scraped.get("wikipedia_description") else "Website",
+                "High" if industry_hint else "Low",
+            ),
             "market_position": _field(
-                (intel.get("market_position") or "")[:180] or "Not publicly available",
-                "Public web scrape", "Medium"),
+                clean_market or "Not publicly available",
+                "Wikipedia" if wiki_sum else "Website",
+                "High" if wiki_sum else ("Medium" if site_desc else "Low"),
+            ),
             "geographic_reach": _field(
-                "India" if "india" in (scraped.get("homepage_text") or "").lower() else "Not publicly available",
-                "Website", "Medium"),
+                "Global" if any(x in (wiki_sum + site_desc).lower() for x in ("worldwide", "global", "multinational"))
+                else ("India" if "india" in (scraped.get("homepage_text") or "").lower() else "Not publicly available"),
+                "Public sources", "Medium"),
             "key_differentiators": [],
         }
     elif isinstance(mkt, dict):
         for k in ("industry", "market_position", "geographic_reach", "market_size_tam", "growth_rate"):
             if k in mkt and not isinstance(mkt[k], dict):
                 mkt[k] = _field(mkt[k])
+        # Replace junk market_position with clean Wikipedia/site prose
+        mp = mkt.get("market_position")
+        mp_val = mp.get("value") if isinstance(mp, dict) else mp
+        if _is_illogical_text(str(mp_val or "")) or not str(mp_val or "").strip():
+            mkt["market_position"] = _field(
+                clean_market or "Not publicly available",
+                "Wikipedia" if wiki_sum else "Website",
+                "High" if wiki_sum else "Low",
+            )
         report["market_analysis"] = mkt
+
+    # Prefer Wikipedia summary for empty/junk company description
+    cp = report.get("company_profile") if isinstance(report.get("company_profile"), dict) else {}
+    desc = cp.get("description")
+    desc_v = desc.get("value") if isinstance(desc, dict) else desc
+    if (not desc_v or _is_illogical_text(str(desc_v))) and (wiki_sum or site_desc):
+        cp["description"] = _field(
+            wiki_sum or site_desc,
+            "Wikipedia" if wiki_sum else "Website",
+            "High" if wiki_sum else "Medium",
+        )
+        report["company_profile"] = cp
+    # Industry from Wikipedia short description when missing
+    ind = cp.get("industry")
+    ind_v = ind.get("value") if isinstance(ind, dict) else ind
+    if (not ind_v or "not publicly" in str(ind_v).lower()) and scraped.get("wikipedia_description"):
+        cp["industry"] = _field(scraped["wikipedia_description"], "Wikipedia", "High")
+        report["company_profile"] = cp
 
     # ── swot_analysis ────────────────────────────────────────────────
     swot = report.get("swot_analysis")
@@ -2199,25 +3533,30 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
                                 for h in hints if "analytics" in h.lower() or "gtag" in h.lower()],
         }
 
-    # ── intelligence_score ───────────────────────────────────────────
-    sc = report.get("intelligence_score")
-    if not isinstance(sc, dict) or "overall" not in sc or isinstance(sc.get("value"), str):
-        n_contacts = len((scraped.get("contact_data") or {}).get("emails") or [])
-        n_pages = len(intel.get("_scraped_pages") or [])
-        n_comps = len(report.get("competitors") or [])
-        swot = report.get("swot_analysis") or {}
-        n_swot = sum(len(swot.get(k) or []) for k in ("strengths", "weaknesses", "opportunities", "threats"))
-        completeness = min(92, 35 + n_pages * 3 + n_contacts * 4 + n_comps * 3 + min(n_swot, 12) * 2)
-        report["intelligence_score"] = {
-            "overall": min(90, completeness + 5),
-            "data_completeness": completeness,
-            "source_reliability": 80 if n_pages >= 4 else (70 if n_pages else 50),
-            "verified_fields_count": n_contacts + n_pages + n_comps,
-            "estimated_fields_count": max(0, n_swot // 2),
-            "unverified_fields_count": 0,
-            "summary": sc.get("value") if isinstance(sc, dict) and isinstance(sc.get("value"), str)
-                       else f"Multi-source report for {company_name} from website + {n_pages} public sites.",
-        }
+    # ── intelligence_score (always numeric for frontend "/100" display) ──
+    sc = report.get("intelligence_score") if isinstance(report.get("intelligence_score"), dict) else {}
+    n_contacts = len((scraped.get("contact_data") or {}).get("emails") or [])
+    n_pages = len(intel.get("_scraped_pages") or [])
+    n_comps = len(report.get("competitors") or [])
+    swot = report.get("swot_analysis") or {}
+    n_swot = sum(len(swot.get(k) or []) for k in ("strengths", "weaknesses", "opportunities", "threats"))
+    completeness = min(92, 35 + n_pages * 3 + n_contacts * 4 + n_comps * 3 + min(n_swot, 12) * 2)
+    computed_overall = min(90, completeness + 5)
+    summary = sc.get("summary") or ""
+    if not summary or _is_illogical_text(summary):
+        summary = f"Multi-source report for {company_name} from website + {n_pages} public sites."
+    report["intelligence_score"] = {
+        "overall": _score_to_int(sc.get("overall"), computed_overall),
+        "data_completeness": _score_to_int(sc.get("data_completeness"), completeness),
+        "source_reliability": _score_to_int(
+            sc.get("source_reliability"),
+            80 if n_pages >= 2 else (70 if n_pages else 50),
+        ),
+        "verified_fields_count": int(sc.get("verified_fields_count") or (n_contacts + n_pages + n_comps)),
+        "estimated_fields_count": int(sc.get("estimated_fields_count") or max(0, n_swot // 2)),
+        "unverified_fields_count": int(sc.get("unverified_fields_count") or 0),
+        "summary": summary,
+    }
 
     # ── risk / financial ─────────────────────────────────────────────
     def _default_risks(label: str) -> dict:
@@ -2366,18 +3705,10 @@ def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = ""
     """
     Discover open roles from LinkedIn Jobs, Naukri, and careers page snippets.
     Returns structured hiring_signals with source URLs for citations.
+    Fast mode: careers page only (no multi-query DDG + no LLM consolidate).
     """
     signals = []
     seen_urls = set()
-
-    queries = [
-        (f'site:linkedin.com/jobs "{company_name}"', "LinkedIn"),
-        (f"site:linkedin.com/jobs {company_name} hiring", "LinkedIn"),
-        (f"site:naukri.com {company_name} jobs", "Naukri"),
-        (f"site:naukri.com {company_name} hiring", "Naukri"),
-        (f"{company_name} careers open positions", "Web"),
-        (f"{company_name} {domain} hiring jobs", "Web"),
-    ]
 
     role_patterns = [
         r"(senior|lead|principal|staff|junior|associate)?\s*"
@@ -2405,8 +3736,27 @@ def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = ""
             "snippet": (snippet or "")[:200],
         })
 
+    # Parse careers page text for roles (always — free/fast)
+    if careers_text:
+        for line in re.split(r"[\n•|]", careers_text):
+            line = line.strip()
+            if len(line) < 8 or len(line) > 100:
+                continue
+            if re.search(r"(engineer|developer|manager|designer|architect|analyst|consultant|lead|head of)", line, re.I):
+                _add(line, f"https://{domain}/careers", "Careers Page", line, careers_text[:200])
+
+    if RESEARCH_SKIP_HIRING_SEARCH:
+        print("[Research] Hiring web-search skipped (fast mode)")
+        return signals[:8]
+
+    queries = [
+        (f'site:linkedin.com/jobs "{company_name}"', "LinkedIn"),
+        (f"site:naukri.com {company_name} jobs", "Naukri"),
+        (f"{company_name} careers open positions", "Web"),
+    ]
+
     for query, platform in queries:
-        results = _ddg_search(query, max_results=8)
+        results = _ddg_search(query, max_results=4)
         for r in results:
             href = r.get("href", "")
             title = r.get("title", "")
@@ -2414,11 +3764,10 @@ def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = ""
             if not href.startswith("http"):
                 continue
             hl = href.lower()
-            if platform == "LinkedIn" and "linkedin.com/jobs" not in hl and "linkedin.com" not in hl:
+            if platform == "LinkedIn" and "linkedin.com" not in hl:
                 continue
             if platform == "Naukri" and "naukri.com" not in hl:
                 continue
-            # Extract role from title
             role = title
             for pat in [
                 r"^(.+?)\s+at\s+",
@@ -2437,37 +3786,7 @@ def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = ""
                         break
             _add(role, href, platform, title, body)
 
-    # Parse careers page text for roles
-    if careers_text:
-        for line in careers_text.split("\n"):
-            line = line.strip()
-            if len(line) < 8 or len(line) > 100:
-                continue
-            if re.search(r"(engineer|developer|manager|designer|architect|analyst|consultant|lead|head of)", line, re.I):
-                _add(line, f"https://{domain}/careers", "Careers Page", line, careers_text[:200])
-
-    # LLM consolidation if we have raw signals
-    if signals:
-        try:
-            prompt = f"""Consolidate these hiring signals for {company_name} into a deduplicated list.
-Merge duplicate roles. Keep source_url and platform from the best source per role.
-
-RAW SIGNALS:
-{json.dumps(signals[:20], indent=2)}
-
-Return ONLY JSON: {{"hiring_signals": [{{"role": "...", "count": 1, "platform": "LinkedIn|Naukri|Careers Page|Web", "source_url": "...", "source_title": "...", "snippet": "..."}}]}}"""
-            raw = llm_client.chat(
-                [{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=2000,
-                json_mode=True,
-            )
-            parsed = json.loads(raw)
-            consolidated = parsed.get("hiring_signals") or signals
-            return consolidated[:15]
-        except Exception as e:
-            print(f"[Research] Hiring signal LLM consolidate failed: {e}")
-
+    # No LLM consolidate in fast path; deep mode keeps heuristic list only for speed
     return signals[:15]
 
 
@@ -2504,19 +3823,32 @@ def run(url: str) -> dict:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     domain = urlparse(url).netloc.replace("www.", "")
+    t_all = time.time()
 
     print(f"\n[Research] ====== Deep Intelligence: {url} ======")
+    print(f"[Research] FAST={RESEARCH_FAST} SKIP_JUDGE={RESEARCH_SKIP_JUDGE} "
+          f"SKIP_HIRING_SEARCH={RESEARCH_SKIP_HIRING_SEARCH}")
 
     print("[Research] Phase 1: Scraping website + sub-pages...")
+    t0 = time.time()
     scraped = _scrape_website(url)
+    print(f"[Research] Phase 1 done in {time.time()-t0:.1f}s")
 
     title = scraped.get("title", "")
-    company_name = re.split(r"[|\-—–]", title)[0].strip() if title else domain.split(".")[0].title()
+    company_name = re.split(r"[|\-—–:]", title)[0].strip() if title else _brand_from_domain(domain)
+    if len(company_name) > 48:
+        company_name = _brand_from_domain(domain)
+    company_name = _anchor_company_name(company_name, domain, scraped)
+    if scraped.get("preferred_display_name"):
+        company_name = _anchor_company_name(scraped["preferred_display_name"], domain, scraped)
 
     print(f"[Research] Phase 2: Intelligence sweep for '{company_name}'...")
+    t0 = time.time()
     intel = _collect_intelligence(company_name, domain)
+    print(f"[Research] Phase 2 done in {time.time()-t0:.1f}s")
 
     print(f"[Research] Phase 3: Azure/LLM ({MODEL}) analysis...")
+    t0 = time.time()
     prompt = _build_prompt(url, company_name, scraped, intel)
     try:
         report = _analyze_with_llm(prompt)
@@ -2526,63 +3858,43 @@ def run(url: str) -> dict:
     except Exception as e:
         print(f"[Research] LLM failed ({e}) — using baseline scrape report with contacts")
         report = _baseline_report(url, company_name, scraped)
+    print(f"[Research] Phase 3 done in {time.time()-t0:.1f}s")
 
-    # ALWAYS inject verified contacts from company site + ALL public sites scraped
+    # ALWAYS inject verified contacts from company site + public sites (filter junk)
     cd = scraped.get("contact_data") or {}
     multi = intel.get("_multi_contacts") or {"emails": [], "phones": []}
     merged_emails, merged_phones = [], []
     seen_e, seen_p = set(), set()
     for e in (cd.get("emails") or []) + (multi.get("emails") or []):
-        if e.get("email") and e["email"] not in seen_e:
-            seen_e.add(e["email"]); merged_emails.append(e)
-    # ZaubaCorp registry emails + address (MCA verified — only when entity match is confident)
-    zauba_conf = scraped.get("zauba_match_confidence") or "Low"
-    zauba_struct = scraped.get("zaubacorp_structured") or {}
-    zauba_dirs = zauba_struct.get("Directors") or []
-    zauba_text = scraped.get("zaubacorp_text") or ""
-    zauba_email = zauba_struct.get("Email Address") or ""
-    zauba_addr = zauba_struct.get("Registered Address") or ""
+        em = (e.get("email") or "").lower().strip()
+        if not em or em in seen_e:
+            continue
+        if not _email_domain_ok(em, domain):
+            continue
+        seen_e.add(em)
+        e = dict(e)
+        e["email"] = em
+        merged_emails.append(e)
+    # Prefer company-domain emails first
+    stem = _domain_stem(domain)
+    merged_emails.sort(
+        key=lambda x: (0 if stem and stem in (x.get("email") or "") else 1, x.get("email") or "")
+    )
 
-    def _director_for_email(email: str) -> str:
-        local = email.split("@")[0].lower().replace(".", " ").replace("_", " ")
-        first = local.split()[0] if local else ""
-        for d in zauba_dirs:
-            name = d.get("name", "")
-            if first and first in name.lower():
-                return name
-        return ""
-
-    if zauba_conf != "Low" and zauba_email and zauba_email.lower() not in seen_e:
-        seen_e.add(zauba_email.lower())
-        merged_emails.insert(0, {
-            "email": zauba_email.lower(),
-            "person_name": _director_for_email(zauba_email) or "MCA Registry Contact",
-            "title": "Director / MCA Filing",
-            "source": "ZaubaCorp MCA",
-            "confidence": zauba_conf,
-        })
-
-    if zauba_conf != "Low":
-        for em in re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", zauba_text):
-            em = em.lower()
-            if em not in seen_e and "zaubacorp" not in em:
-                seen_e.add(em)
-                merged_emails.append({
-                    "email": em,
-                    "person_name": _director_for_email(em) or "",
-                    "title": "MCA Registry",
-                    "source": "ZaubaCorp MCA",
-                    "confidence": zauba_conf,
-                })
     for ph in (cd.get("phones") or []) + (multi.get("phones") or []):
-        key = re.sub(r"\D", "", ph.get("number", ""))
+        num = (ph.get("number") or "").strip()
+        if not _is_valid_phone(num):
+            continue
+        key = re.sub(r"\D", "", num)
         if key and key not in seen_p:
-            seen_p.add(key); merged_phones.append(ph)
+            seen_p.add(key)
+            merged_phones.append(ph)
+
     sources_used = ["Company Website (Homepage / Footer)"]
     for page in intel.get("_scraped_pages") or []:
         if page.get("emails") or page.get("phones"):
             sources_used.append(page.get("domain", "public"))
-    reg_addr = cd.get("address") or zauba_addr or ""
+    reg_addr = cd.get("address") or ""
     report["contact_intelligence"] = {
         "phones": merged_phones,
         "emails": merged_emails,
@@ -2590,8 +3902,8 @@ def run(url: str) -> dict:
         "toll_free": cd.get("toll_free") or "Not publicly available",
         "registered_address": reg_addr,
         "addresses": cd.get("addresses", []) or ([reg_addr] if reg_addr else []),
-        "address_source": ("ZaubaCorp MCA + " if zauba_addr else "") + " + ".join(sources_used[:6]),
-        "address_confidence": "High" if zauba_addr or merged_emails or merged_phones else "Low",
+        "address_source": " + ".join(sources_used[:6]),
+        "address_confidence": "High" if merged_emails or merged_phones or reg_addr else "Low",
     }
     print(f"[Research] Injected contacts from {len(sources_used)} sources: "
           f"{len(merged_emails)} emails, {len(merged_phones)} phones")
@@ -2599,89 +3911,176 @@ def run(url: str) -> dict:
     # Fix Groq schema drift so Overview / SWOT / etc. always render
     report = _normalize_report(report, scraped, company_name, url, intel)
 
-    zauba_conf = scraped.get("zauba_match_confidence") or "Low"
-    zauba_dirs = (scraped.get("zaubacorp_structured") or {}).get("Directors") or []
-    if zauba_dirs and zauba_conf != "Low":
-        report["leadership_team"] = [
-            {
-                "name": d.get("name", ""),
-                "role": d.get("designation") or "Director",
-                "din": d.get("din") or "",
-                "source": "ZaubaCorp MCA",
-                "confidence": zauba_conf,
-                "background": f"DIN: {d['din']}" if d.get("din") else "Official MCA registry (ZaubaCorp)",
-            }
-            for d in zauba_dirs if isinstance(d, dict) and d.get("name")
-        ]
-    elif scraped.get("zaubacorp_text") and zauba_conf != "Low":
-        # Parse director names from prose if table scrape missed
-        dm = re.search(
-            r"Directors? of .+? are\s+(.+?)(?:\.|\n|$)",
-            scraped["zaubacorp_text"],
-            re.I,
+    # Leadership from Wikipedia + website + public snippets (source-faithful, never invent)
+    extracted = _collect_leadership(company_name, domain, scraped, intel)
+    scrape_blob = " ".join([
+        scraped.get("wikipedia_text") or "",
+        scraped.get("leadership_text") or "",
+        scraped.get("about_text") or "",
+        scraped.get("homepage_text") or "",
+        intel.get("ceo_founder") or "",
+        intel.get("multi_source_digest") or "",
+    ]).lower()
+    llm_kept = []
+    for l in report.get("leadership_team") or []:
+        if not isinstance(l, dict):
+            continue
+        name = (l.get("name") or "").strip()
+        src = str(l.get("source") or "").lower()
+        if not name or l.get("din") or "zauba" in src or "mca" in src or "cin" in src:
+            continue
+        # Keep LLM person only if name appears in scraped sources (faithful)
+        if name.lower() in scrape_blob:
+            llm_kept.append({
+                "name": name,
+                "role": l.get("role") or "Leadership",
+                "source": l.get("source") or "Public web",
+                "confidence": l.get("confidence") or "Medium",
+                "background": l.get("background") or "",
+            })
+    merged_leaders, seen_n = [], set()
+    for l in extracted + llm_kept:
+        key = (l.get("name") or "").lower()
+        if not key or key in seen_n:
+            continue
+        seen_n.add(key)
+        merged_leaders.append(l)
+    report["leadership_team"] = merged_leaders[:8]
+
+    # No CIN / MCA — public research only
+    report["registry_intelligence"] = {
+        "source": "disabled",
+        "confidence": "Low",
+        "message": "Public web research — leadership from company website, Wikipedia, and reputable sources only.",
+        "entity_scope": "none",
+        "directors": [],
+        "cin": "",
+    }
+    if isinstance(report.get("company_profile"), dict):
+        for k in ("cin", "mca_status", "authorized_capital", "paid_up_capital", "zaubacorp_url"):
+            report["company_profile"].pop(k, None)
+
+    # Preferred display name from brand heuristics only (no MCA)
+    if scraped.get("preferred_display_name"):
+        company_name = _anchor_company_name(scraped["preferred_display_name"], domain, scraped)
+        if isinstance(report.get("company_profile"), dict):
+            report["company_profile"]["name"] = company_name
+
+    # LLM-as-judge final gate — optional in fast mode (saves 15–40s)
+    if RESEARCH_SKIP_JUDGE:
+        print("[Research] Phase 3b: LLM judge skipped (fast mode)")
+        # Still drop MCA/junk leadership + illogical market position
+        ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+        cur = ma.get("market_position")
+        cur_val = cur.get("value") if isinstance(cur, dict) else cur
+        if _is_illogical_text(str(cur_val or "")):
+            ma["market_position"] = _field("Not publicly available", "Fast filter", "Low")
+            report["market_analysis"] = ma
+        company_name = _anchor_company_name(
+            (report.get("company_profile") or {}).get("name") or company_name,
+            domain,
+            scraped,
         )
-        if dm:
-            names = [n.strip() for n in re.split(r",|\band\b", dm.group(1)) if n.strip()]
-            report["leadership_team"] = [
-                {"name": n, "role": "Director", "source": "ZaubaCorp MCA",
-                 "confidence": "High", "background": ""}
-                for n in names if len(n) > 3
-            ]
+        if isinstance(report.get("company_profile"), dict):
+            report["company_profile"]["name"] = company_name
+    else:
+        print("[Research] Phase 3b: LLM-as-judge (Groq) validating report...")
+        report = _apply_llm_judge(report, scraped, company_name, url)
+        if isinstance(report.get("company_profile"), dict) and report["company_profile"].get("name"):
+            company_name = _anchor_company_name(report["company_profile"]["name"], domain, scraped)
+            report["company_profile"]["name"] = company_name
 
-    # Structured MCA registry block for frontend (authentic public-source data)
-    zs = scraped.get("zaubacorp_structured") or {}
-    zauba_conf = scraped.get("zauba_match_confidence") or "Low"
-    if scraped.get("zaubacorp_url") and zs and zauba_conf != "Low":
-        report["registry_intelligence"] = {
-            "source": "ZaubaCorp MCA",
-            "url": scraped["zaubacorp_url"],
-            "confidence": zauba_conf,
-            "match_score": scraped.get("zauba_match_score") or 0,
-            "match_reason": scraped.get("zauba_match_reason") or "",
-            "legal_name": zs.get("Company Name") or company_name,
-            "cin": zs.get("CIN") or "",
-            "status": zs.get("Status") or "",
-            "incorporation_date": zs.get("Date of Incorporation") or "",
-            "authorized_capital": zs.get("Authorized Capital") or "",
-            "paid_up_capital": zs.get("Paid Up Capital") or "",
-            "registered_address": zs.get("Registered Address") or "",
-            "email": zs.get("Email Address") or "",
-            "roc": zs.get("RoC") or "",
-            "directors": [
-                {
-                    "name": d.get("name", ""),
-                    "din": d.get("din") or "",
-                    "designation": d.get("designation") or "Director",
-                    "source": "ZaubaCorp MCA",
-                    "confidence": zauba_conf,
-                }
-                for d in (zs.get("Directors") or []) if isinstance(d, dict) and d.get("name")
-            ],
-        }
-    elif scraped.get("zauba_alternatives"):
-        report["registry_intelligence"] = {
-            "source": "ZaubaCorp MCA",
-            "confidence": "Low",
-            "message": "Could not verify exact legal entity — directors hidden until confirmed",
-            "match_score": scraped.get("zauba_match_score") or 0,
-            "match_reason": scraped.get("zauba_match_reason") or "",
-            "alternatives": scraped.get("zauba_alternatives") or [],
-        }
+    # After judge: re-assert no CIN + keep source-extracted leadership
+    report["registry_intelligence"] = {
+        "source": "disabled",
+        "confidence": "Low",
+        "message": "Public web research — leadership from company website, Wikipedia, and reputable sources only.",
+        "entity_scope": "none",
+        "directors": [],
+        "cin": "",
+    }
+    # Re-merge leadership if judge wiped it; never reintroduce MCA/CIN people
+    post_leaders = [
+        l for l in (report.get("leadership_team") or [])
+        if isinstance(l, dict)
+        and l.get("name")
+        and "zauba" not in str(l.get("source") or "").lower()
+        and "mca" not in str(l.get("source") or "").lower()
+        and "cin" not in str(l.get("source") or "").lower()
+        and not l.get("din")
+    ]
+    if not post_leaders and merged_leaders:
+        post_leaders = merged_leaders
+    elif merged_leaders:
+        # Prefer extracted names; keep judge-approved extras that appear in scrape
+        seen_n = {(l.get("name") or "").lower() for l in merged_leaders}
+        for l in post_leaders:
+            key = (l.get("name") or "").lower()
+            if key and key not in seen_n and key in scrape_blob:
+                merged_leaders.append(l)
+                seen_n.add(key)
+        post_leaders = merged_leaders
+    report["leadership_team"] = post_leaders[:8]
+    if isinstance(report.get("company_profile"), dict):
+        for k in ("cin", "mca_status", "authorized_capital", "paid_up_capital", "zaubacorp_url"):
+            report["company_profile"].pop(k, None)
 
-    # Hiring signals from LinkedIn, Naukri, careers page
-    print(f"[Research] Phase 4: Fetching hiring signals (LinkedIn/Naukri)...")
+    # Final identity hard-lock (blocked scrapes / judge drift)
+    company_name = _anchor_company_name(company_name, domain, scraped)
+    if isinstance(report.get("company_profile"), dict):
+        report["company_profile"]["name"] = company_name
+    if scraped.get("_scrape_blocked"):
+        report.setdefault("_meta_flags", {})
+        # stored later in _meta; keep a note on profile description if empty/junk
+        desc = report["company_profile"].get("description") if isinstance(report.get("company_profile"), dict) else ""
+        desc_v = desc.get("value") if isinstance(desc, dict) else desc
+        if not desc_v or _is_blocked_page_text(str(desc_v), "") or _is_illogical_text(str(desc_v)):
+            report["company_profile"]["description"] = _field(
+                f"{company_name} (website partially blocked bot scrapers; profile from public web + domain brand)",
+                "Domain brand lock",
+                "Medium",
+            )
+
+    # Hiring signals (lighter / faster — no second LLM call)
+    print("[Research] Phase 4: Fetching hiring signals (LinkedIn/Naukri)...")
+    t0 = time.time()
     careers_text = scraped.get("careers_text") or ""
     hiring = _fetch_hiring_signals(company_name, domain, careers_text)
-    report["hiring_signals"] = hiring
-    conclusion = _ai_conclusion_from_hiring(company_name, hiring, report)
-    report["ai_conclusion"] = conclusion.get("ai_conclusion", "")
-    report["signals_used"] = conclusion.get("signals_used", [])
+    print(f"[Research] Phase 4 done in {time.time()-t0:.1f}s")
+    # Drop illogical duplicate "1 open" noise — keep unique roles only
+    uniq_hire, seen_roles = [], set()
+    for h in hiring or []:
+        role = (h.get("role") or "").strip().lower()
+        if not role or role in seen_roles:
+            continue
+        seen_roles.add(role)
+        uniq_hire.append(h)
+    report["hiring_signals"] = uniq_hire[:8]
+    if uniq_hire:
+        top = ", ".join((h.get("role") or "")[:40] for h in uniq_hire[:3])
+        report["ai_conclusion"] = (
+            f"{company_name} shows public hiring activity related to: {top}."
+        )
+        report["signals_used"] = [h.get("role") for h in uniq_hire[:4] if h.get("role")]
+    else:
+        report["ai_conclusion"] = f"No confident public hiring signals found for {company_name}."
+        report["signals_used"] = []
 
     citations = []
     seen_urls = set()
 
+    # also skip discovery of zauba in _add_cite helper when disabled
     def _add_cite(title, cite_url, category="Web"):
         if not cite_url or not str(cite_url).startswith("http"):
+            return
+        low = str(cite_url).lower()
+        if (not ENABLE_ZAUBACORP) and (not scraped.get("cin_verified")) and "zaubacorp.com" in low:
+            return
+        # Never cite ChatGPT / AI chat login walls as sources
+        if any(x in low for x in (
+            "chatgpt.com", "chat.openai.com", "openai.com/chat",
+            "accounts.google", "login.microsoftonline",
+        )):
             return
         if cite_url in seen_urls:
             return
@@ -2701,28 +4100,35 @@ def run(url: str) -> dict:
         })
 
     _add_cite(company_name + " Website", url, "Company Website")
-    if scraped.get("zaubacorp_url"):
-        _add_cite("ZaubaCorp MCA Registry", scraped["zaubacorp_url"], "MCA Registry")
-    if scraped.get("wikipedia_text"):
-        _add_cite("Wikipedia", f"https://en.wikipedia.org/wiki/{company_name.replace(' ', '_')}", "Wikipedia")
+    if scraped.get("wikipedia_url"):
+        _add_cite("Wikipedia", scraped["wikipedia_url"], "Wikipedia")
+    elif scraped.get("wikipedia_text"):
+        _add_cite(
+            "Wikipedia",
+            f"https://en.wikipedia.org/wiki/{company_name.replace(' ', '_')}",
+            "Wikipedia",
+        )
     for cp in (scraped.get("contact_data") or {}).get("source_pages", []):
         _add_cite("Contact / Footer", cp, "Contact")
     for sl in scraped.get("social_links", [])[:8]:
         _add_cite(urlparse(sl).netloc.replace("www.", ""), sl, "Social Media")
     # Citations = sites we actually visited/scraped first, then discovery URLs
     for page in intel.get("_scraped_pages") or []:
-        _add_cite(page.get("title") or page.get("domain", ""), page.get("url", ""), page.get("category", "Public Web"))
+        page_url = page.get("url") or ""
+        if "zaubacorp.com" in page_url.lower():
+            continue
+        _add_cite(page.get("title") or page.get("domain", ""), page_url, page.get("category", "Public Web"))
     for s in intel.get("_source_urls", []):
-        _add_cite(s.get("title", ""), s.get("url", ""), s.get("category", "Search"))
+        s_url = s.get("url") or ""
+        if "zaubacorp.com" in s_url.lower():
+            continue
+        _add_cite(s.get("title", ""), s_url, s.get("category", "Search"))
     for n in (report.get("recent_news") or []):
         if isinstance(n, dict) and n.get("source_url"):
             _add_cite(n.get("title") or n.get("source", ""), n["source_url"], "News")
     _add_cite("LinkedIn Search",
               f"https://www.linkedin.com/search/results/companies/?keywords={company_name.replace(' ', '%20')}",
               "LinkedIn")
-    _add_cite("ZaubaCorp Search",
-              f"https://www.zaubacorp.com/companysearchresults/{company_name.replace(' ', '%20')}",
-              "MCA Registry")
     _add_cite("Google News",
               f"https://news.google.com/search?q={company_name.replace(' ', '+')}",
               "News")
@@ -2734,15 +4140,47 @@ def run(url: str) -> dict:
                 h.get("platform", "Hiring"),
             )
 
+    # Boost completeness when leadership / contacts / products present
+    score = report.get("intelligence_score") if isinstance(report.get("intelligence_score"), dict) else {}
+    completeness = int(score.get("data_completeness") or score.get("overall") or 40)
+    if report.get("leadership_team"):
+        completeness = min(100, completeness + 25)
+    if merged_emails or merged_phones:
+        completeness = min(100, completeness + 10)
+    if (report.get("competitors") or []):
+        completeness = min(100, completeness + 5)
+    overall = int(score.get("overall") or completeness)
+    if report.get("leadership_team"):
+        overall = max(overall, min(100, overall + 10))
+    report["intelligence_score"] = {
+        "overall": overall,
+        "data_completeness": completeness,
+        "source_reliability": int(score.get("source_reliability") or 60),
+        "verified_fields_count": (
+            len(report.get("competitors") or [])
+            + len(report.get("leadership_team") or [])
+            + len(merged_emails)
+            + len(merged_phones)
+        ),
+        "estimated_fields_count": score.get("estimated_fields_count") or 0,
+        "unverified_fields_count": score.get("unverified_fields_count") or 0,
+        "summary": score.get("summary")
+        or "Public-web research — facts tied to scraped sources only.",
+    }
+
     report["_meta"] = {
         "queried_url": url,
         "company_name": company_name,
         "domain": domain,
+        "scrape_blocked": bool(scraped.get("_scrape_blocked")),
+        "cin_verified": False,
+        "verified_cin": "",
         "social_links": scraped.get("social_links", []),
         "model_used": MODEL,
         "sources_checked": [
             "Company Website + Footer",
-            "MCP Search across ZaubaCorp/Tofler/AmbitionBox/Glassdoor/Justdial/IndiaMART/LinkedIn/News",
+            "Wikipedia (leadership / company facts)",
+            "MCP Search across LinkedIn/Crunchbase/OpenCorporates/News/Reviews/B2B catalogs",
             "MCP Scrape: visited & scraped each public page",
             "Social Media", "LinkedIn", "Google News",
         ],
@@ -2750,8 +4188,11 @@ def run(url: str) -> dict:
         "citations": citations[:20],
         "citation_count": min(len(citations), 20),
         "generated_at": time.strftime("%Y-%m-%d %H:%M UTC"),
+        "elapsed_seconds": round(time.time() - t_all, 1),
+        "fast_mode": RESEARCH_FAST,
     }
 
-    print(f"[Research] ====== Complete: contacts={len(cd.get('emails', []))}e/"
-          f"{len(cd.get('phones', []))}p citations={len(citations)} ======\n")
+    print(f"[Research] ====== Complete in {time.time()-t_all:.1f}s: contacts={len(cd.get('emails', []))}e/"
+          f"{len(cd.get('phones', []))}p citations={len(citations)} "
+          f"leadership={len(report.get('leadership_team') or [])} ======\n")
     return report

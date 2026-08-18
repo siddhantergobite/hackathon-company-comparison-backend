@@ -1,0 +1,407 @@
+{
+  "company_profile": {
+    "name": "Google",
+    "website": "https://www.google.com",
+    "description": "Google About Store What's on your mind? Add images Add files Tools 🍌 Create images AI Mode 🍌 Create Remove Create Images See more Delete Report inappropriate predictions Google offered in: हिन्दी বাংলা తెలుగు मराठी தமிழ் ગુજરાતી ಕನ್ನಡ മലയാളം ਪੰਜਾਬੀ India Advertising Business How ",
+    "founded": {
+      "value": "Not publicly available",
+      "source": "google.com",
+      "confidence": "Low"
+    },
+    "leadership": []
+  },
+  "products_services": {
+    "primary_offerings": [
+      {
+        "item": "Search",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "item": "Advertising",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "item": "Cloud Computing (Google Cloud)",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "item": "AI Models (Gemini series)",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ],
+    "pricing_model": {
+      "model": "Advertising‑based for consumer services; subscription and usage‑based pricing for enterprise services (Google Workspace, Cloud)",
+      "source": "google.com",
+      "confidence": "High"
+    },
+    "target_customers": {
+      "segments": "Consumers worldwide, enterprises of all sizes, developers, advertisers",
+      "source": "google.com",
+      "confidence": "High"
+    }
+  },
+  "market_analysis": {
+    "industry": {
+      "sector": "Internet Services & Online Advertising",
+      "source": "google.com",
+      "confidence": "High"
+    },
+    "market_position": {
+      "value": "Not publicly available",
+      "source": "Fast filter",
+      "confidence": "Low"
+    },
+    "geographic_reach": {
+      "reach": "Worldwide presence with services available in most countries",
+      "source": "google.com",
+      "confidence": "High"
+    }
+  },
+  "swot_analysis": {
+    "strengths": [
+      {
+        "point": "Dominant market share in web search and online advertising",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Advanced AI capabilities demonstrated by Gemini 3.7 Flash model",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Broad ecosystem of products (Search, Workspace, Cloud, Android, hardware)",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ],
+    "weaknesses": [
+      {
+        "point": "Heavy reliance on advertising revenue for the majority of income",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Ongoing regulatory scrutiny and antitrust investigations in multiple jurisdictions",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Privacy concerns among users and advocacy groups",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ],
+    "opportunities": [
+      {
+        "point": "Expansion of AI‑driven services and enterprise cloud offerings",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Monetization of new AI models such as Gemini across developer and business platforms",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Growth of hardware portfolio (Pixel phones, Nest devices) and integration with services",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ],
+    "threats": [
+      {
+        "point": "Intense competition from Microsoft (Bing, Azure), Amazon (AWS), and Meta (Facebook, Instagram)",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Potential antitrust actions that could limit business practices",
+        "source": "google.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Increasing cybersecurity threats targeting large tech platforms",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ]
+  },
+  "competitors": [
+    {
+      "name": "Microsoft",
+      "description": "Technology company offering search (Bing), cloud (Azure), and productivity suites.",
+      "strengths": "Strong enterprise cloud presence and integration with Windows ecosystem.",
+      "weaknesses": "Search market share significantly lower than Google.",
+      "threat_level": "High",
+      "source": "google.com",
+      "confidence": "Medium"
+    },
+    {
+      "name": "Amazon",
+      "description": "E‑commerce giant with leading cloud platform (AWS) and growing advertising business.",
+      "strengths": "Dominant cloud infrastructure and extensive retail data assets.",
+      "weaknesses": "Search capabilities are limited compared to Google.",
+      "threat_level": "High",
+      "source": "google.com",
+      "confidence": "Medium"
+    },
+    {
+      "name": "Meta Platforms",
+      "description": "Social media company with large advertising network across Facebook, Instagram, and WhatsApp.",
+      "strengths": "Massive user base and sophisticated ad targeting.",
+      "weaknesses": "No comparable search engine; recent focus on AI lagging behind Google.",
+      "threat_level": "Medium",
+      "source": "google.com",
+      "confidence": "Medium"
+    }
+  ],
+  "risk_assessment": {
+    "overall_risk_level": "Medium",
+    "regulatory_risks": [
+      {
+        "risk": "Antitrust investigations in the US, EU, and India",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ],
+    "competitive_risks": [
+      {
+        "risk": "Strong competition from Microsoft, Amazon, and Meta in cloud, AI, and advertising",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ],
+    "operational_risks": [
+      {
+        "risk": "Dependence on large data centers and potential service disruptions",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ],
+    "reputational_risks": [
+      {
+        "risk": "Privacy concerns and public perception of data handling practices",
+        "source": "google.com",
+        "confidence": "High"
+      }
+    ]
+  },
+  "financial_data": {
+    "revenue": {
+      "value": "Not publicly available",
+      "source": "N/A",
+      "confidence": "Low"
+    },
+    "funding": {
+      "value": "Not publicly available",
+      "source": "N/A",
+      "confidence": "Low"
+    },
+    "revenue_estimate": {
+      "value": "Not disclosed in public scrapes — check MCA filings / Tofler for private cos",
+      "source": "Public web",
+      "confidence": "Low"
+    }
+  },
+  "recent_news": [],
+  "intelligence_score": {
+    "overall": "Medium",
+    "data_completeness": "Low",
+    "source_reliability": "High",
+    "summary": "Core corporate information (products, market position, employee count) is available from Google’s official site and LinkedIn; detailed financials, leadership names, and competitor specifics are not publicly disclosed in the provided sources."
+  },
+  "contact_intelligence": {
+    "phones": [],
+    "emails": [
+      {
+        "email": "press@google.com",
+        "label": "HR / Careers",
+        "person": "",
+        "source": "Contact page (/contact)",
+        "confidence": "High",
+        "verified": true
+      }
+    ],
+    "whatsapp": "Not publicly available",
+    "toll_free": "Not publicly available",
+    "registered_address": "",
+    "addresses": [],
+    "address_source": "Company Website (Homepage / Footer)",
+    "address_confidence": "High"
+  },
+  "content_strategy": {
+    "brand_voice": "Professional, clear voice for Google",
+    "content_pillars": [
+      "Product Updates",
+      "Customer Stories",
+      "Engineering Blog",
+      "Thought Leadership"
+    ],
+    "viral_content_ideas": [
+      "Feature demos for Google",
+      "Customer ROI breakdowns",
+      "Founder/engineering AMAs"
+    ],
+    "top_hashtags": [
+      "#Google",
+      "#Business",
+      "#India",
+      "#Growth",
+      "#Innovation"
+    ],
+    "competitor_content_gap": "Publish more public case studies and proof-of-work content"
+  },
+  "tech_stack": {
+    "note": "Website technology only — detected from homepage HTML/scripts",
+    "website_cms": {
+      "value": "Vue",
+      "source": "Homepage scan",
+      "confidence": "Medium"
+    },
+    "frontend_framework": {
+      "value": "Vue",
+      "source": "Homepage scan",
+      "confidence": "Medium"
+    },
+    "analytics_tools": []
+  },
+  "employee_insights": {
+    "total_employees": {
+      "value": "Not publicly available",
+      "source": "Public web",
+      "confidence": "Low"
+    },
+    "glassdoor_rating": {
+      "value": "Not publicly available",
+      "source": "Glassdoor scrape",
+      "confidence": "Low"
+    },
+    "culture_summary": {
+      "value": "Limited public culture reviews found",
+      "source": "Public web scrape",
+      "confidence": "Low"
+    },
+    "hiring_trend": {
+      "value": "Not publicly available",
+      "source": "Public web",
+      "confidence": "Low"
+    },
+    "remote_policy": {
+      "value": "Not publicly available",
+      "source": "Public web",
+      "confidence": "Low"
+    }
+  },
+  "leadership_team": [],
+  "registry_intelligence": {
+    "source": "disabled",
+    "confidence": "Low",
+    "message": "ZaubaCorp / Indian MCA registry is disabled. Research uses website + global public web only.",
+    "entity_scope": "none",
+    "directors": []
+  },
+  "hiring_signals": [],
+  "ai_conclusion": "No confident public hiring signals found for Google.",
+  "signals_used": [],
+  "_meta": {
+    "queried_url": "https://www.google.com",
+    "company_name": "Google",
+    "domain": "google.com",
+    "scrape_blocked": false,
+    "social_links": [],
+    "model_used": "openai/gpt-oss-120b",
+    "sources_checked": [
+      "Company Website + Footer",
+      "MCP Search across LinkedIn/Crunchbase/OpenCorporates/News/Reviews/B2B catalogs",
+      "MCP Scrape: visited & scraped each public page",
+      "Social Media",
+      "LinkedIn",
+      "Google News"
+    ],
+    "mcp_sites_scraped": [
+      "d3h68kq65nkuzu.cloudfront.net",
+      "linkedin.com"
+    ],
+    "citations": [
+      {
+        "title": "Google Website",
+        "url": "https://www.google.com",
+        "domain": "google.com",
+        "category": "Company Website",
+        "favicon": "https://www.google.com/s2/favicons?domain=google.com&sz=64"
+      },
+      {
+        "title": "Contact / Footer",
+        "url": "https://www.google.com/contact",
+        "domain": "google.com",
+        "category": "Contact",
+        "favicon": "https://www.google.com/s2/favicons?domain=google.com&sz=64"
+      },
+      {
+        "title": "Google Company Overview | Levels.fyi",
+        "url": "https://d3h68kq65nkuzu.cloudfront.net/company/Google/",
+        "domain": "d3h68kq65nkuzu.cloudfront.net",
+        "category": "Public Web",
+        "favicon": "https://www.google.com/s2/favicons?domain=d3h68kq65nkuzu.cloudfront.net&sz=64"
+      },
+      {
+        "title": "Google | LinkedIn",
+        "url": "https://www.linkedin.com/company/google",
+        "domain": "linkedin.com",
+        "category": "Company Profile",
+        "favicon": "https://www.google.com/s2/favicons?domain=linkedin.com&sz=64"
+      },
+      {
+        "title": "Google | GOOG Stock Price, Company Overview & News",
+        "url": "https://www.forbes.com/companies/google/",
+        "domain": "forbes.com",
+        "category": "Public Web",
+        "favicon": "https://www.google.com/s2/favicons?domain=forbes.com&sz=64"
+      },
+      {
+        "title": "Best Search Engines: 15 Google Rivals in 2026 - FourWeekMBA",
+        "url": "https://fourweekmba.com/google-competitors/",
+        "domain": "fourweekmba.com",
+        "category": "Public Web",
+        "favicon": "https://www.google.com/s2/favicons?domain=fourweekmba.com&sz=64"
+      },
+      {
+        "title": "Google Competitors | ChampSignal",
+        "url": "https://champsignal.com/competitors/google.com",
+        "domain": "champsignal.com",
+        "category": "Public Web",
+        "favicon": "https://www.google.com/s2/favicons?domain=champsignal.com&sz=64"
+      },
+      {
+        "title": "Google Hong Kong | LinkedIn",
+        "url": "https://hk.linkedin.com/company/googlehk",
+        "domain": "hk.linkedin.com",
+        "category": "Company Profile",
+        "favicon": "https://www.google.com/s2/favicons?domain=hk.linkedin.com&sz=64"
+      },
+      {
+        "title": "LinkedIn Search",
+        "url": "https://www.linkedin.com/search/results/companies/?keywords=Google",
+        "domain": "linkedin.com",
+        "category": "LinkedIn",
+        "favicon": "https://www.google.com/s2/favicons?domain=linkedin.com&sz=64"
+      },
+      {
+        "title": "Google News",
+        "url": "https://news.google.com/search?q=Google",
+        "domain": "news.google.com",
+        "category": "News",
+        "favicon": "https://www.google.com/s2/favicons?domain=news.google.com&sz=64"
+      }
+    ],
+    "citation_count": 10,
+    "generated_at": "2026-08-18 09:55 UTC",
+    "elapsed_seconds": 25.4,
+    "fast_mode": true
+  }
+}

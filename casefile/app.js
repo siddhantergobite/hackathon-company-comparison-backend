@@ -29,6 +29,26 @@ function val(field) {
   return field || '';
 }
 
+function scoreNum(v) {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    if (v > 0 && v <= 1) return Math.round(v * 100);
+    return Math.round(v);
+  }
+  const s = String(v || '').trim().toLowerCase();
+  const map = { 'very high': 90, high: 80, medium: 60, med: 60, low: 35, 'very low': 20 };
+  if (Object.prototype.hasOwnProperty.call(map, s)) return map[s];
+  const n = parseFloat(String(v));
+  if (!Number.isFinite(n)) return null;
+  if (n > 0 && n <= 1) return Math.round(n * 100);
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function isJunkText(s) {
+  const t = String(s || '').toLowerCase();
+  if (!t) return true;
+  return /what's on your mind|create images|ai mode|add images|add files|forgot password|sign in|cookie|captcha|google offered in|request has been blocked|skip to main content|jump to content|main menu|move to sidebar|chatgpt|chat\.openai|what can i help with|message chatgpt|upgrade to plus/.test(t);
+}
+
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s || '';
@@ -210,55 +230,18 @@ function renderCitations(meta) {
 
 function renderRegistryBlock(reg) {
   if (!reg) return '';
-  const conf = reg.confidence || 'Low';
-  const confClass = conf === 'High' ? 'conf-high' : conf === 'Medium' ? 'conf-med' : 'conf-low';
-
-  if (conf === 'Low' && reg.message) {
-    const alts = (reg.alternatives || []).map(a =>
-      `<div class="intel-row" style="font-size:12px;color:var(--text-muted);">
-        ${esc(a.legal_name || 'Unknown')} (score ${a.score || 0})
-      </div>`
-    ).join('');
-    return `
-      <div class="contact-block" style="margin-bottom:18px;border-color:#e8c4a0;">
-        <strong>⚠ MCA entity not verified</strong>
-        <span class="cite-badge ${confClass}" style="margin-left:8px;">● ${esc(conf)} confidence</span>
-        <div style="margin-top:8px;font-size:13px;">${esc(reg.message)}</div>
-        ${reg.match_reason ? `<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">${esc(reg.match_reason)}</div>` : ''}
-        ${alts ? `<div style="margin-top:10px;"><b>Other matches found:</b>${alts}</div>` : ''}
-      </div>`;
+  // CIN / MCA removed — public research only
+  if (reg.source === 'disabled' || !reg.cin) {
+    if (reg.message) {
+      return `
+        <div class="contact-block" style="margin-bottom:18px;border-color:#d4d4d4;">
+          <strong>Public research mode</strong>
+          <div style="margin-top:8px;font-size:13px;color:var(--text-muted);">${esc(reg.message)}</div>
+        </div>`;
+    }
+    return '';
   }
-
-  if (!reg.cin) return '';
-  const dirs = (reg.directors || []).map(d =>
-    `<div class="intel-row">
-      <strong>${esc(d.name)}</strong> — ${esc(d.designation || 'Director')}
-      ${d.din ? `<span class="cite-badge">DIN ${esc(d.din)}</span>` : ''}
-      <span class="cite-badge ${confClass}">● ${esc(d.confidence || conf)}</span>
-      <span class="cite-badge">${esc(d.source || 'ZaubaCorp MCA')}</span>
-    </div>`
-  ).join('');
-  const zaubaLink = reg.url
-    ? `<a href="${esc(ensureUrl(reg.url))}" target="_blank" rel="noopener" style="font-size:12px;color:var(--teal);">View on ZaubaCorp ↗</a>`
-    : '';
-  return `
-    <div class="contact-block" style="margin-bottom:18px;">
-      <strong>✅ MCA Official Data (via ZaubaCorp)</strong>
-      <span class="cite-badge ${confClass}" style="margin-left:8px;">● ${esc(conf)} confidence</span>
-      ${reg.legal_name ? `<div style="margin-top:6px;font-size:13px;"><b>Legal entity:</b> ${esc(reg.legal_name)}</div>` : ''}
-      ${reg.match_reason ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${esc(reg.match_reason)}</div>` : ''}
-      <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;">
-        ${reg.cin ? `<span class="tag">CIN: ${esc(reg.cin)}</span>` : ''}
-        ${reg.status ? `<span class="tag">Status: ${esc(reg.status)}</span>` : ''}
-        ${reg.incorporation_date ? `<span class="tag">Incorporated: ${esc(reg.incorporation_date)}</span>` : ''}
-        ${reg.authorized_capital ? `<span class="tag">Auth. Capital: ${esc(reg.authorized_capital)}</span>` : ''}
-        ${reg.paid_up_capital ? `<span class="tag">Paid-up: ${esc(reg.paid_up_capital)}</span>` : ''}
-      </div>
-      ${reg.registered_address ? `<div style="margin-top:10px;font-size:13px;"><b>Registered Address:</b> ${esc(reg.registered_address)}</div>` : ''}
-      ${reg.email ? `<div style="margin-top:6px;font-size:13px;"><b>MCA Email:</b> ${esc(reg.email)} <span class="cite-badge ${confClass}">● ${esc(conf)}</span></div>` : ''}
-      <div style="margin-top:8px;">${zaubaLink}</div>
-    </div>
-    ${dirs ? `<h4 style="margin-top:14px;">Directors (MCA Registry)</h4>${dirs}` : ''}`;
+  return '';
 }
 
 function renderIntelPanels(report) {
@@ -275,8 +258,13 @@ function renderIntelPanels(report) {
 
   const offerings = (prod.primary_offerings || prod.value || []).map(o => {
     const name = pointOf(o);
-    return name ? `<span class="tag">${esc(name)}</span>` : '';
+    if (!name || isJunkText(name)) return '';
+    return `<span class="tag">${esc(name)}</span>`;
   }).join('');
+
+  const mp = mkt.market_position;
+  const mpVal = typeof mp === 'object' ? val(mp) : mp;
+  const mpSafe = (!isJunkText(mpVal) && hasData(mpVal)) ? mp : null;
 
   document.getElementById('intel-overview').innerHTML = `
     ${renderRegistryBlock(report.registry_intelligence)}
@@ -285,7 +273,7 @@ function renderIntelPanels(report) {
     ${intelRow('Target Customers', prod.target_customers)}
     ${intelRow('Pricing Model', prod.pricing_model)}
     <h4 style="margin-top:18px;">Market Position</h4>
-    ${intelRow('Market Position', mkt.market_position)}
+    ${mpSafe ? intelRow('Market Position', mpSafe) : '<p class="field-value">—</p>'}
     ${intelRow('Geographic Reach', mkt.geographic_reach)}
     <h4 style="margin-top:18px;">Website Technology</h4>
     ${intelRow('Website CMS', tech.website_cms || tech.cms)}
@@ -317,15 +305,15 @@ function renderIntelPanels(report) {
           <span class="cite-badge conf-${(l.confidence || 'medium').toLowerCase()}">● ${esc(l.confidence || 'Medium')}</span>
           ${l.background ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${esc(l.background)}</div>` : ''}
         </div>`).join('')
-    : '<p class="field-value">No public leadership found</p>';
+    : '<p class="field-value">No public leadership found on the company website or public sources.</p>';
 
   document.getElementById('intel-people').innerHTML = `
     <h4>Workforce Stats</h4>
-    ${intelRow('Total Employees', emp.total_employees || co.employee_count)}
+    ${intelRow('Total Employees', emp.total_employees || co.employee_count || co.employees)}
     ${intelRow('Hiring Trend', emp.hiring_trend)}
     ${intelRow('Remote Policy', emp.remote_policy)}
     ${intelRow('Glassdoor Rating', emp.glassdoor_rating)}
-    <h4 style="margin-top:18px;">Leadership &amp; Directors</h4>
+    <h4 style="margin-top:18px;">Leadership</h4>
     ${leaderHtml}
     <h4 style="margin-top:18px;">Culture</h4>
     <p class="field-value" style="font-style:italic;">${esc(val(emp.culture_summary) || 'Limited public culture reviews found')}</p>`;
@@ -503,38 +491,45 @@ function renderTargetSummary(report) {
   const sc = report.intelligence_score || {};
   const name = meta.company_name || val(co.name) || 'Company';
   const ind = val(co.industry);
-  const hq = val(co.headquarters);
+  const hqRaw = val(co.headquarters);
+  const hq = hasData(hqRaw) && !/^not publicly available$/i.test(String(hqRaw).trim()) ? hqRaw : '';
   const desc = val(co.description);
+  const overall = scoreNum(sc.overall);
+  const completeness = scoreNum(sc.data_completeness);
+  const reliability = scoreNum(sc.source_reliability);
+  const heroSummary = (!isJunkText(sc.summary) && sc.summary)
+    || (!isJunkText(desc) && desc)
+    || '';
 
   document.getElementById('target-hero-name').textContent = name + (hq ? ' • ' + hq.split(',')[0] : '');
   document.getElementById('target-hero-sub').textContent = [ind, val(co.founded)].filter(hasData).join(' · ') || meta.domain || '';
-  document.getElementById('target-hero-summary').textContent = sc.summary || desc || '';
+  document.getElementById('target-hero-summary').textContent = heroSummary;
 
   const targetCol = document.getElementById('target-col-header');
   if (targetCol) targetCol.textContent = `${name} appears to need`;
 
-  document.getElementById('target-conclusion').textContent = report.ai_conclusion || sc.summary || '—';
+  document.getElementById('target-conclusion').textContent = report.ai_conclusion || sc.summary || heroSummary || '—';
   document.getElementById('target-signals').innerHTML = (report.signals_used || report.hiring_signals || [])
     .slice(0, 6).map(s => `<span class="tag amber">${esc(typeof s === 'object' ? s.role : s)}</span>`).join('');
-  document.getElementById('target-score').textContent = sc.overall ? `${sc.overall}/100 overall` : '—';
+  document.getElementById('target-score').textContent = overall != null ? `${overall}/100 overall` : '—';
 
   const kpis = [
     ['Founded', val(co.founded)],
-    ['Employees', val(co.employee_count) || val((report.employee_insights || {}).total_employees)],
+    ['Employees', val(co.employee_count) || val(co.employees) || val((report.employee_insights || {}).total_employees)],
     ['Revenue', val(co.annual_revenue)],
     ['HQ', hq],
-    ['Score', sc.overall ? sc.overall + '/100' : ''],
+    ['Score', overall != null ? overall + '/100' : ''],
   ].filter(([, v]) => hasData(v));
   document.getElementById('target-kpis').innerHTML = kpis.map(([l, v]) =>
     `<div class="kpi-chip"><div class="lbl">${l}</div><div class="val">${esc(v)}</div></div>`
   ).join('');
 
   const conf = document.getElementById('target-confidence');
-  if (sc.data_completeness || sc.source_reliability || meta.generated_at) {
+  if (completeness != null || reliability != null || meta.generated_at) {
     conf.style.display = 'flex';
     conf.innerHTML = `<b>DATA CONFIDENCE:</b>
-      ${sc.data_completeness ? `<span>Completeness: <strong>${sc.data_completeness}/100</strong></span>` : ''}
-      ${sc.source_reliability ? `<span>Source Reliability: <strong>${sc.source_reliability}/100</strong></span>` : ''}
+      ${completeness != null ? `<span>Completeness: <strong>${completeness}/100</strong></span>` : ''}
+      ${reliability != null ? `<span>Source Reliability: <strong>${reliability}/100</strong></span>` : ''}
       ${meta.citation_count || (meta.citations || []).length ? `<span>${meta.citation_count || meta.citations.length} sources verified</span>` : ''}
       ${meta.generated_at ? `<span>Generated: ${esc(meta.generated_at)}</span>` : ''}`;
   }
@@ -544,9 +539,9 @@ function renderTargetSummary(report) {
 
   const leaders = (report.leadership_team || []).filter(l => l && l.name);
   document.getElementById('target-leadership').innerHTML = leaders.length
-    ? leaders.slice(0, 3).map(l =>
+    ? leaders.slice(0, 4).map(l =>
         leaderCard(l) +
-        (l.din ? `<div style="font-size:11px;color:var(--text-muted);">DIN ${esc(l.din)} · ${esc(l.source || 'MCA')} · ${esc(l.confidence || 'High')}</div>` : '')
+        `<div style="font-size:11px;color:var(--text-muted);">${esc(l.role || '')}${l.source ? ' · ' + esc(l.source) : ''}${l.confidence ? ' · ' + esc(l.confidence) : ''}</div>`
       ).join('')
     : '<span class="field-value">No public leadership found</span>';
 

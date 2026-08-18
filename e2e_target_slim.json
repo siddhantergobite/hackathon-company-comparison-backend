@@ -1,0 +1,352 @@
+{
+  "company_profile": {
+    "name": "Buffer",
+    "website": {
+      "value": "https://buffer.com",
+      "source": "https://buffer.com",
+      "confidence": "High"
+    },
+    "description": {
+      "value": "Buffer is a social‑media management SaaS platform that lets creators, brands and agencies schedule, publish, analyze and collaborate on content across major social platforms.",
+      "source": "https://buffer.com",
+      "confidence": "High"
+    },
+    "founded": {
+      "value": "Not publicly available",
+      "source": "N/A",
+      "confidence": "Low"
+    },
+    "headquarters": {
+      "value": "San Francisco, CA, United States",
+      "source": "https://www.linkedin.com/company/bufferapp",
+      "confidence": "High"
+    },
+    "employees": {
+      "value": "329",
+      "source": "https://www.linkedin.com/company/bufferapp",
+      "confidence": "High"
+    }
+  },
+  "registry_intelligence": {
+    "source": "disabled",
+    "confidence": "Low",
+    "message": "ZaubaCorp / Indian MCA registry is disabled. Research uses website + global public web only.",
+    "entity_scope": "none",
+    "directors": []
+  },
+  "leadership_team": [],
+  "competitors": [
+    {
+      "name": "Hootsuite",
+      "description": "A widely used social media management platform offering scheduling, monitoring, and analytics for businesses of all sizes.",
+      "strengths": "Extensive integration ecosystem and strong enterprise customer base.",
+      "weaknesses": "Higher pricing tiers for comparable feature sets.",
+      "threat_level": "High",
+      "source": "Judge-validated",
+      "confidence": "Medium"
+    },
+    {
+      "name": "Sprout Social",
+      "description": "A comprehensive social media management and engagement suite focused on analytics, reporting, and team collaboration.",
+      "strengths": "Robust reporting capabilities and responsive customer support.",
+      "weaknesses": "Limited free or low‑cost plans, making it less accessible for very small teams.",
+      "threat_level": "Medium",
+      "source": "Judge-validated",
+      "confidence": "Medium"
+    },
+    {
+      "name": "Later",
+      "description": "A visual planner primarily for Instagram and other visual‑first platforms, with scheduling and media library features.",
+      "strengths": "Intuitive visual calendar and strong media library tools.",
+      "weaknesses": "Covers fewer social networks than Buffer, focusing mainly on visual platforms.",
+      "threat_level": "Low",
+      "source": "Judge-validated",
+      "confidence": "Medium"
+    },
+    {
+      "name": "Loomly",
+      "description": "A social media calendar and publishing tool that emphasizes brand guidelines and collaborative workflow.",
+      "strengths": "Clear brand compliance features and easy‑to‑use content calendar.",
+      "weaknesses": "Smaller integration list and less advanced analytics compared with Buffer.",
+      "threat_level": "Medium",
+      "source": "Judge-validated",
+      "confidence": "Medium"
+    }
+  ],
+  "market_analysis": {
+    "industry": {
+      "value": "Social media management SaaS",
+      "confidence": "High",
+      "source": "Website"
+    },
+    "market_position": {
+      "value": "Buffer is a social media management platform that enables individuals and teams to schedule, publish, and analyze content across multiple social networks, emphasizing simplicity and collaboration.",
+      "confidence": "Medium",
+      "source": "Website"
+    },
+    "geographic_reach": {
+      "value": "Global (serves users worldwide)",
+      "source": "https://buffer.com",
+      "confidence": "Medium"
+    }
+  },
+  "swot_analysis": {
+    "strengths": [
+      {
+        "point": "Flexible toolkit that covers scheduling, publishing, analytics and AI‑assisted content creation",
+        "source": "https://buffer.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Large and active user community (100,000+ creators, brands, agencies)",
+        "source": "https://buffer.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Integration with a wide range of social platforms (including newer ones like Threads, Bluesky, Mastodon)",
+        "source": "https://buffer.com",
+        "confidence": "High"
+      }
+    ],
+    "weaknesses": [
+      {
+        "point": "Heavy reliance on a freemium model may constrain monetization potential compared with fully paid competitors",
+        "source": "https://buffer.com",
+        "confidence": "Medium"
+      },
+      {
+        "point": "Employee headcount (329) is modest relative to larger enterprise‑grade competitors, which may affect scaling of advanced features",
+        "source": "https://www.linkedin.com/company/bufferapp",
+        "confidence": "Medium"
+      },
+      {
+        "point": "Public financials (revenue/profit) largely undisclosed vs listed peers",
+        "source": "Public web scrape",
+        "confidence": "Medium"
+      },
+      {
+        "point": "Limited third-party news coverage reduces brand discovery outside owned channels",
+        "source": "News scrape",
+        "confidence": "Low"
+      }
+    ],
+    "opportunities": [
+      {
+        "point": "Expansion of AI‑driven content creation and repurposing capabilities",
+        "source": "https://buffer.com",
+        "confidence": "High"
+      },
+      {
+        "point": "Growing demand for social‑media management tools among mid‑size enterprises",
+        "source": "https://instantdomainsearch.com/directory/buffer.com",
+        "confidence": "Medium"
+      },
+      {
+        "point": "Potential to add deeper integrations with emerging platforms (e.g., Threads, Bluesky)",
+        "source": "https://buffer.com",
+        "confidence": "Medium"
+      }
+    ],
+    "threats": [
+      {
+        "point": "Intense competition from well‑funded rivals offering similar SaaS suites",
+        "source": "https://instantdomainsearch.com/directory/buffer.com",
+        "confidence": "Medium"
+      },
+      {
+        "point": "Rapid changes in social‑media platform APIs could disrupt functionality",
+        "source": "https://buffer.com",
+        "confidence": "Medium"
+      },
+      {
+        "point": "Potential regulatory scrutiny around data privacy for social‑media analytics",
+        "source": "https://instantdomainsearch.com/directory/buffer.com",
+        "confidence": "Low"
+      }
+    ]
+  },
+  "contact_intelligence": {
+    "emails": [],
+    "phones": [],
+    "address": null
+  },
+  "intelligence_score": {
+    "overall": 85,
+    "data_completeness": 85,
+    "source_reliability": 55,
+    "verified_fields_count": 4,
+    "estimated_fields_count": 0,
+    "unverified_fields_count": 0,
+    "summary": "All retained data is directly verified from Buffer’s website, ensuring high trustworthiness."
+  },
+  "_meta": {
+    "queried_url": "https://buffer.com",
+    "company_name": "Buffer",
+    "domain": "buffer.com",
+    "social_links": [
+      "https://www.linkedin.com/company/bufferapp",
+      "https://x.com/buffer",
+      "https://www.facebook.com/bufferapp",
+      "https://www.instagram.com/buffer"
+    ],
+    "model_used": "openai/gpt-oss-120b",
+    "sources_checked": [
+      "Company Website + Footer",
+      "MCP Search across ZaubaCorp/Tofler/AmbitionBox/Glassdoor/Justdial/IndiaMART/LinkedIn/News",
+      "MCP Scrape: visited & scraped each public page",
+      "Social Media",
+      "LinkedIn",
+      "Google News"
+    ],
+    "mcp_sites_scraped": [
+      "au.linkedin.com",
+      "linkedin.com",
+      "opencorporates.com",
+      "instantdomainsearch.com"
+    ],
+    "citations": [
+      {
+        "title": "Buffer Website",
+        "url": "https://buffer.com",
+        "domain": "buffer.com",
+        "category": "Company Website",
+        "favicon": "https://www.google.com/s2/favicons?domain=buffer.com&sz=64"
+      },
+      {
+        "title": "Contact / Footer",
+        "url": "https://buffer.com/about/contact",
+        "domain": "buffer.com",
+        "category": "Contact",
+        "favicon": "https://www.google.com/s2/favicons?domain=buffer.com&sz=64"
+      },
+      {
+        "title": "linkedin.com",
+        "url": "https://www.linkedin.com/company/bufferapp",
+        "domain": "linkedin.com",
+        "category": "Social Media",
+        "favicon": "https://www.google.com/s2/favicons?domain=linkedin.com&sz=64"
+      },
+      {
+        "title": "x.com",
+        "url": "https://x.com/buffer",
+        "domain": "x.com",
+        "category": "Social Media",
+        "favicon": "https://www.google.com/s2/favicons?domain=x.com&sz=64"
+      },
+      {
+        "title": "facebook.com",
+        "url": "https://www.facebook.com/bufferapp",
+        "domain": "facebook.com",
+        "category": "Social Media",
+        "favicon": "https://www.google.com/s2/favicons?domain=facebook.com&sz=64"
+      },
+      {
+        "title": "instagram.com",
+        "url": "https://www.instagram.com/buffer",
+        "domain": "instagram.com",
+        "category": "Social Media",
+        "favicon": "https://www.google.com/s2/favicons?domain=instagram.com&sz=64"
+      },
+      {
+        "title": "Buffer | LinkedIn",
+        "url": "https://au.linkedin.com/company/bufferapp",
+        "domain": "au.linkedin.com",
+        "category": "Company Profile",
+        "favicon": "https://www.google.com/s2/favicons?domain=au.linkedin.com&sz=64"
+      },
+      {
+        "title": "OpenCorporates",
+        "url": "https://opencorporates.com/",
+        "domain": "opencorporates.com",
+        "category": "Global Registry",
+        "favicon": "https://www.google.com/s2/favicons?domain=opencorporates.com&sz=64"
+      },
+      {
+        "title": "buffer.com: Traffic, Backlinks & Authority... | Instant Domain Search",
+        "url": "https://instantdomainsearch.com/directory/buffer.com",
+        "domain": "instantdomainsearch.com",
+        "category": "Public Web",
+        "favicon": "https://www.google.com/s2/favicons?domain=instantdomainsearch.com&sz=64"
+      },
+      {
+        "title": "Buffer: Social media management for everyone",
+        "url": "https://buffer.com/",
+        "domain": "buffer.com",
+        "category": "Public Web",
+        "favicon": "https://www.google.com/s2/favicons?domain=buffer.com&sz=64"
+      },
+      {
+        "title": "Buffer Review 2026: Pricing, Features, Pros & Cons, Ratings ...",
+        "url": "https://research.com/software/reviews/buffer",
+        "domain": "research.com",
+        "category": "Public Web",
+        "favicon": "https://www.google.com/s2/favicons?domain=research.com&sz=64"
+      },
+      {
+        "title": "Buffer vs. Hootsuite: #1 Content Strategy Tool?",
+        "url": "https://astrihost.com/buffer-vs-hootsuite",
+        "domain": "astrihost.com",
+        "category": "Public Web",
+        "favicon": "https://www.google.com/s2/favicons?domain=astrihost.com&sz=64"
+      },
+      {
+        "title": "Buffer - Tech Details",
+        "url": "https://www.crunchbase.com/organization/buffer/tech_details",
+        "domain": "crunchbase.com",
+        "category": "Funding / Company",
+        "favicon": "https://www.google.com/s2/favicons?domain=crunchbase.com&sz=64"
+      },
+      {
+        "title": "Free Food Isn’t Cutting It: How Startups Are Competing For Talent In...",
+        "url": "https://news.crunchbase.com/business/startup-tech-perks-benefits-fertility-remote/",
+        "domain": "news.crunchbase.com",
+        "category": "Funding / Company",
+        "favicon": "https://www.google.com/s2/favicons?domain=news.crunchbase.com&sz=64"
+      },
+      {
+        "title": "LinkedIn Search",
+        "url": "https://www.linkedin.com/search/results/companies/?keywords=Buffer",
+        "domain": "linkedin.com",
+        "category": "LinkedIn",
+        "favicon": "https://www.google.com/s2/favicons?domain=linkedin.com&sz=64"
+      },
+      {
+        "title": "ZaubaCorp Search",
+        "url": "https://www.zaubacorp.com/companysearchresults/Buffer",
+        "domain": "zaubacorp.com",
+        "category": "MCA Registry",
+        "favicon": "https://www.google.com/s2/favicons?domain=zaubacorp.com&sz=64"
+      },
+      {
+        "title": "Google News",
+        "url": "https://news.google.com/search?q=Buffer",
+        "domain": "news.google.com",
+        "category": "News",
+        "favicon": "https://www.google.com/s2/favicons?domain=news.google.com&sz=64"
+      },
+      {
+        "title": "190 Buffer Remote jobs in United States - LinkedIn",
+        "url": "https://www.linkedin.com/jobs/buffer-remote-jobs",
+        "domain": "linkedin.com",
+        "category": "LinkedIn",
+        "favicon": "https://www.google.com/s2/favicons?domain=linkedin.com&sz=64"
+      },
+      {
+        "title": "2,000+ Buffer Job jobs in United States - LinkedIn",
+        "url": "https://www.linkedin.com/jobs/buffer-job-jobs",
+        "domain": "linkedin.com",
+        "category": "LinkedIn",
+        "favicon": "https://www.google.com/s2/favicons?domain=linkedin.com&sz=64"
+      },
+      {
+        "title": "248 Buffer jobs in India",
+        "url": "https://in.linkedin.com/jobs/buffer-jobs",
+        "domain": "in.linkedin.com",
+        "category": "LinkedIn",
+        "favicon": "https://www.google.com/s2/favicons?domain=in.linkedin.com&sz=64"
+      }
+    ],
+    "citation_count": 20,
+    "generated_at": "2026-08-17 18:18 UTC"
+  }
+}

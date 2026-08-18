@@ -68,12 +68,26 @@ BEST = {
 @app.get("/health")
 def health():
     from backend.services import llm as llm_client
+    st = llm_client.llm_status()
     return {
         "status": "ok",
         "version": "2.0.0",
-        "llm": llm_client.ACTIVE_MODEL_LABEL,
-        "azure_configured": llm_client.azure_configured(),
+        "llm": st.get("active_model"),
+        **st,
     }
+
+
+@app.get("/api/llm-status")
+def api_llm_status(probe: bool = False):
+    """
+    Show which project .env / Groq key suffix the backend is actually using.
+    Add ?probe=1 to make a live Groq call (confirms the key works).
+    """
+    from backend.services import llm as llm_client
+    if probe:
+        return llm_client.probe_groq()
+    return llm_client.llm_status()
+
 
 
 # ── Image Tools ────────────────────────────────────────────────────────────────

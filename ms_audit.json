@@ -1,0 +1,17 @@
+{
+  "name": "Sevan Multi-Site Solutions, Inc.",
+  "comps": [],
+  "leaders": [],
+  "reg": {
+    "source": "disabled",
+    "confidence": "Low",
+    "message": "ZaubaCorp / Indian MCA registry is disabled. Research uses website + global public web only.",
+    "entity_scope": "none",
+    "directors": []
+  },
+  "mp": {
+    "value": "Not publicly available",
+    "confidence": "Low",
+    "source": "Website mismatch"
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "source_pass": true,
+  "buffer": {
+    "label": "Buffer",
+    "url": "https://buffer.com",
+    "name": "Buffer",
+    "pass": false,
+    "issues": [
+      "zauba still in citations: [{'title': 'ZaubaCorp Search', 'url': 'https://www.zaubacorp.com/companysearchresults/Buffer', 'domain': 'zaubacorp.com', 'category': 'MCA Registry', 'favicon': 'https://www.google.com/s2/favicons?domain=zaubacorp.com&sz=64'}]",
+      "zaubacorp still listed in sources_checked"
+    ],
+    "ok": [
+      "registry disabled",
+      "no MCA leadership",
+      "name=Buffer",
+      "competitors=['Hootsuite', 'Sprout Social', 'Later', 'Zoho Social']",
+      "market_position ok",
+      "SWOT strengths=3",
+      "SWOT weaknesses=3",
+      "SWOT opportunities=3",
+      "SWOT threats=3",
+      "emails=0 phones=0",
+      "leaders=[]"
+    ],
+    "score": 85,
+    "competitors": [
+      "Hootsuite",
+      "Sprout Social",
+      "Later",
+      "Zoho Social"
+    ],
+    "registry_source": "disabled"
+  },
+  "microsoft": {
+    "label": "Microsoft",
+    "url": "https://www.microsoft.com",
+    "name": "Microsoft",
+    "pass": true,
+    "issues": [],
+    "ok": [
+      "registry disabled",
+      "no zauba citations",
+      "sources_checked clean",
+      "no MCA leadership",
+      "name=Microsoft",
+      "competitors=['Amazon Web Services (AWS)', 'Google Cloud Platform (GCP)', 'Apple Inc.', 'Sony Interactive Entertainment']",
+      "market_position ok",
+      "SWOT strengths=2",
+      "SWOT weaknesses=2",
+      "SWOT opportunities=4",
+      "SWOT threats=4",
+      "emails=1 phones=0",
+      "leaders=[]"
+    ],
+    "score": 78,
+    "competitors": [
+      "Amazon Web Services (AWS)",
+      "Google Cloud Platform (GCP)",
+      "Apple Inc.",
+      "Sony Interactive Entertainment"
+    ],
+    "registry_source": "disabled"
+  },
+  "pitch": {
+    "pass": false,
+    "ok": [
+      "ai_conclusion",
+      "matches=4",
+      "no zauba url in pitch"
+    ],
+    "issues": [
+      "weak email_draft"
+    ],
+    "match_score": 75
+  },
+  "overall_pass": false
+}

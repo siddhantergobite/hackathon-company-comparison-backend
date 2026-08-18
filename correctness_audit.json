@@ -1,0 +1,176 @@
+{
+  "groq_model_info": {
+    "GROQ_MODEL_env_or_default": "openai/gpt-oss-120b",
+    "RESEARCH_USE_GROQ": true,
+    "company_research_MODEL": "openai/gpt-oss-120b",
+    "RESEARCH_FAST": true
+  },
+  "overall_correctness_pct": 84,
+  "by_size_avg_pct": {
+    "small": 86,
+    "medium": 83,
+    "large": 83
+  },
+  "companies_tested": 5,
+  "companies_with_wrong_facts": 0,
+  "interpretation": "Core identity + industry peers are mostly correct; exact financials/leadership/SWOT wording are soft estimates, not guaranteed.",
+  "results": [
+    {
+      "size": "small",
+      "url": "https://ergobite.com",
+      "notes": "Small product/dev studio",
+      "name": "Ergobite",
+      "elapsed_s": 30.8,
+      "scrape_blocked": false,
+      "competitors": [
+        "ThoughtWorks",
+        "Toptal",
+        "Cognizant Digital Engineering"
+      ],
+      "market_position": "Boutique product engineering partner with a focus on AI/ML and full‑stack development, positioned as an on‑demand development partner for startups.",
+      "description": "Full‑stack product design, development, SEO and marketing company focused on high‑quality, scalable software & web development services with AI/ML solutions.",
+      "score": 62,
+      "hard_fails": [],
+      "soft_gaps": [
+        "leadership empty (safe)"
+      ],
+      "passes": [
+        "brand OK (Ergobite)",
+        "no Zauba/DIN",
+        "product/market keywords hit=7",
+        "no junk UI text",
+        "competitors present: ['ThoughtWorks', 'Toptal', 'Cognizant Digital Engineering']",
+        "score=62"
+      ],
+      "correctness_pct": 86,
+      "verdict": "CORE_CORRECT_WITH_GAPS",
+      "model": "openai/gpt-oss-120b",
+      "fast_mode": true,
+      "wall_s": 30.8
+    },
+    {
+      "size": "medium",
+      "url": "https://buffer.com",
+      "notes": "Mid-size SaaS social tool",
+      "name": "Buffer",
+      "elapsed_s": 29.9,
+      "scrape_blocked": false,
+      "competitors": [
+        "Hootsuite",
+        "Sprout Social",
+        "Later"
+      ],
+      "market_position": "Established player with a strong focus on simplicity and a free tier that drives wide adoption",
+      "description": "Buffer provides social media management tools that let individuals, creators, brands and agencies publish, schedule, analyze and collaborate across multiple platforms.",
+      "score": 35,
+      "hard_fails": [],
+      "soft_gaps": [
+        "leadership empty (safe)"
+      ],
+      "passes": [
+        "brand OK (Buffer)",
+        "no Zauba/DIN",
+        "product/market keywords hit=4",
+        "no junk UI text",
+        "competitors OK: ['Hootsuite', 'Sprout Social', 'Later']",
+        "score=35"
+      ],
+      "correctness_pct": 86,
+      "verdict": "CORE_CORRECT_WITH_GAPS",
+      "model": "openai/gpt-oss-120b",
+      "fast_mode": true,
+      "wall_s": 37.7
+    },
+    {
+      "size": "medium",
+      "url": "https://www.notion.so",
+      "notes": "Mid/large productivity SaaS",
+      "name": "Notion",
+      "elapsed_s": 79.6,
+      "scrape_blocked": false,
+      "competitors": [],
+      "market_position": "Positioned as an AI‑native workspace trusted by top cloud companies",
+      "description": "AI workspace that integrates docs, projects, knowledge base, and automation for teams",
+      "score": 35,
+      "hard_fails": [],
+      "soft_gaps": [
+        "no competitors returned",
+        "leadership empty (safe)"
+      ],
+      "passes": [
+        "brand OK (Notion)",
+        "no Zauba/DIN",
+        "product/market keywords hit=2",
+        "no junk UI text",
+        "score=35"
+      ],
+      "correctness_pct": 80,
+      "verdict": "CORE_CORRECT_WITH_GAPS",
+      "model": "openai/gpt-oss-120b",
+      "fast_mode": true,
+      "wall_s": 79.6
+    },
+    {
+      "size": "large",
+      "url": "https://www.microsoft.com",
+      "notes": "Large enterprise (often bot-blocked)",
+      "name": "Microsoft",
+      "elapsed_s": 40.6,
+      "scrape_blocked": true,
+      "competitors": [],
+      "market_position": "Not publicly available",
+      "description": "Microsoft develops software, services, devices and solutions that help individuals and organizations achieve more.",
+      "score": 35,
+      "hard_fails": [],
+      "soft_gaps": [
+        "no competitors returned",
+        "leadership empty (safe)"
+      ],
+      "passes": [
+        "brand OK (Microsoft)",
+        "no Zauba/DIN",
+        "product/market keywords hit=3",
+        "no junk UI text",
+        "score=35"
+      ],
+      "correctness_pct": 80,
+      "verdict": "CORE_CORRECT_WITH_GAPS",
+      "model": "openai/gpt-oss-120b",
+      "fast_mode": true,
+      "wall_s": 40.7
+    },
+    {
+      "size": "large",
+      "url": "https://www.google.com",
+      "notes": "Large (homepage scrapes poorly)",
+      "name": "Google",
+      "elapsed_s": 24.1,
+      "scrape_blocked": false,
+      "competitors": [
+        "Microsoft",
+        "Amazon",
+        "Meta Platforms"
+      ],
+      "market_position": "World’s leading search engine (over 90% market share), largest digital‑advertising platform, top‑3 cloud provider, dominant video platform (YouTube).",
+      "description": "Google provides a range of products and services including Search, Advertising, Cloud, Workspace, Android, YouTube, and hardware such as Pixel devices.",
+      "score": 60,
+      "hard_fails": [],
+      "soft_gaps": [
+        "leadership empty (safe)"
+      ],
+      "passes": [
+        "brand OK (Google)",
+        "no Zauba/DIN",
+        "product/market keywords hit=5",
+        "no junk UI text",
+        "competitors OK: ['Microsoft', 'Amazon', 'Meta Platforms']",
+        "score=60"
+      ],
+      "correctness_pct": 86,
+      "verdict": "CORE_CORRECT_WITH_GAPS",
+      "model": "openai/gpt-oss-120b",
+      "fast_mode": true,
+      "wall_s": 24.1
+    }
+  ]
+}
