@@ -1,0 +1,171 @@
+- About Nividous Intelligent Automation Platform  <About Nividous RPA/Overview.htm>
+- About Control Center  <About Nividous RPA/About_Control_Center.htm>
+- Product Support  <Support.htm>
+- Disclaimer  <Disclaimer.htm>
+- Logger Configurations  <About_Studio/Logger_Configurations.htm>
+- Working with RPA  <Working_with_RPA/Working_with_RPA.htm>
+    - Uploading Draft Processes  <Working_with_RPA/Uploading_Draft_Processes/Uploading_Draft_Processes.htm>
+        - Deploying RPA Process from Studio  <Working_with_RPA/Uploading_Draft_Processes/Deploying_RPA_Process_from_the_Nividous_RPA.htm>
+        - Setting Preferences in Studio  <Working_with_RPA/Uploading_Draft_Processes/Setting_Preferences_in_Nividous_RPA.htm>
+    - Creating a New Process  <Working_with_RPA/Creating_a_New_Process.htm>
+    - Upgrading Processes  <Working_with_RPA/Upgrading_Processes.htm>
+    - Managing Process Repository  <Working_with_RPA/Managing_Process_Repository/Managing_process_Repository.htm>
+        - Managing Draft Process Authorization  <Working_with_RPA/Managing_Process_Repository/Managing_Draft_Process_Authorization.htm>
+        - Managing Draft Process Versions  <Working_with_RPA/Managing_Process_Repository/Managing_Draft_Process_Versions.htm>
+    - Managing Schedules  <Working_with_RPA/Managing_Schedules/Managing_Schedules.htm>
+        - Adding Schedules  <Working_with_RPA/Managing_Schedules/Adding_Schedules.htm>
+        - Viewing Schedules  <Working_with_RPA/Managing_Schedules/Viewing_Schedules.htm>
+    - Monitoring Robots and Deployed Processes  <Working_with_RPA/Monitoring_Robots_and_Deployed_Processes/Monitoring_Robots_and_Deployed_Processes.htm>
+        - Viewing Robots  <Working_with_RPA/Monitoring_Robots_and_Deployed_Processes/Viewing_Robots.htm>
+        - Managing Authorization of Robots  <Working_with_RPA/Monitoring_Robots_and_Deployed_Processes/Managing_Authorization_of_Robots.htm>
+        - Viewing Executed Processes  <Working_with_RPA/Monitoring_Robots_and_Deployed_Processes/Viewing_Executed_Processes.htm>
+        - Filtering Executed Processes  <Working_with_RPA/Monitoring_Robots_and_Deployed_Processes/Filtering_Executed_Processes.htm>
+        - Viewing Audit Logs  <Working_with_RPA/Monitoring_Robots_and_Deployed_Processes/Viewing_Audit_Logs.htm>
+    - Using Vault Records  <Working_with_RPA/Using_Vault_Records/Using_Vault_Records.htm>
+        - Viewing and Searching Vault Records  <Working_with_RPA/Using_Vault_Records/Viewing_and_Searching_Vault_Records.htm>
+        - Adding Passwords in Vault Records  <Working_with_RPA/Using_Vault_Records/Adding_Passwords_in_Vault_Records.htm>
+        - Adding Variables in Vault Records  <Working_with_RPA/Using_Vault_Records/Adding_Variables_in_Vault_Records.htm>
+        - Adding Multiple Records to the same Identifier  <Working_with_RPA/Using_Vault_Records/Adding_Multiple_Records_to_the_same_Identifier.htm>
+    - Using RPA Dashboard  <Working_with_RPA/Using_RPA_Dashboard/Using_RPA_Dashboard.htm>
+        - Types of Charts  <Working_with_RPA/Using_RPA_Dashboard/Types_of_Charts.htm>
+        - Filtering Records from Dashboard  <Working_with_RPA/Using_RPA_Dashboard/Filtering_Records_from_Dashboard.htm>
+    - Working with Queue  <Working_with_RPA/Working_with_Queue/Working_with_Queue.htm>
+        - Managing Queue  <Working_with_RPA/Working_with_Queue/Managing_Queue.htm>
+- Working with LPA  <Working_with_BPM/Working_with_BPM.htm>
+    - Using Business Processes  <Working_with_BPM/Using_Business_Processes/Using_Business_Processes.htm>
+        - Viewing Processes  <Working_with_BPM/Using_Business_Processes/Viewing_Processes.htm>
+        - Deploying Processes  <Working_with_BPM/Using_Business_Processes/Deploying_Processes.htm>
+        - Managing Instances  <Working_with_BPM/Using_Business_Processes/Managing_Instances.htm>
+        - Filtering Processes and Instances  <Working_with_BPM/Using_Business_Processes/Filtering_Processes_and_Instances.htm>
+    - Using My Tasks  <Working_with_BPM/Using_My_Task/Using_My_Task.htm>
+        - Configuring Task View  <Working_with_BPM/Using_My_Task/Configuring_My_Tasks.htm>
+        - Managing Tasks  <Working_with_BPM/Using_My_Task/Managing_Tasks.htm>
+        - Filtering Tasks  <Working_with_BPM/Using_My_Task/Filtering_Task.htm>
+        - Assigning Tasks  <Working_with_BPM/Using_My_Task/Assigning_Tasks.htm>
+        - Customizing User Task Forms using JSP Files  <Working_with_BPM/Using_My_Task/Customizing_User_Task_Forms_using_JSP_Files.htm>
+    - Using Reports  <Working_with_BPM/Using_Reports/Using_Reports.htm>
+        - Managing Configurations  <Working_with_BPM/Using_Reports/Managing_Configurations/Managing_Configurations.htm>
+            - Database Configuration  <Working_with_BPM/Using_Reports/Managing_Configurations/Database_Configuration.htm>
+            - Report Metadata Configuration  <Working_with_BPM/Using_Reports/Managing_Configurations/Report_Metadata_Configuration.htm>
+        - Configuring Reports  <Working_with_BPM/Using_Reports/Configuring_Reports/Configuring_Reports.htm>
+            - Configuring Reports for Slice and Dice Widget  <Working_with_BPM/Using_Reports/Configuring_Reports/Configuring_Reports_for_Slice_and_Dice_Widget.htm>
+            - Configuring Reports for Table Widget  <Working_with_BPM/Using_Reports/Configuring_Reports/Configuring_Reports_for_Table_Widget.htm>
+            - Configuring Reports for Card Widget  <Working_with_BPM/Using_Reports/Configuring_Reports/Configuring_Reports_for_Card_Widget.htm>
+        - Viewing Reports  <Working_with_BPM/Using_Reports/Viewing_Reports.htm>
+        - Editing Reports  <Working_with_BPM/Using_Reports/Editing_Reports.htm>
+        - Deleting Reports  <Working_with_BPM/Using_Reports/Deleting_Reports.htm>
+    - Using Business Dashboard  <Working_with_BPM/Using_Business_Dashboard/Using_Business_Dashboard.htm>
+        - Configuring Dashboard  <Working_with_BPM/Using_Business_Dashboard/Configuring_Dashboard.htm>
+        - Viewing Dashboard  <Working_with_BPM/Using_Business_Dashboard/Viewing_Dashboard.htm>
+        - Editing Dashboard  <Working_with_BPM/Using_Business_Dashboard/Editing_Dashboard.htm>
+        - Deleting Dashboard  <Working_with_BPM/Using_Business_Dashboard/Deleting_Dashboard.htm>
+        - Setting Default Dashboard  <Working_with_BPM/Using_Business_Dashboard/Setting_Default_Dashboard.htm>
+- Working with Smart Bots  <Working_with_Smart_Bot/Working_with_Smart_Bot.htm>
+    - Control Center - Smart Bot User Interface  <Working_with_Smart_Bot/Overview_of_SB_Module_from_CC.htm>
+    - Overview of CV Models  <Working_with_Smart_Bot/Overview_of_CV_Models.htm>
+        - CV Model Lifecycle  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Model_Lifecycle/Model_Lifecycle.htm>
+            - Adding Models  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Model_Lifecycle/Adding_Models.htm>
+            - Managing Models  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Model_Lifecycle/Managing_Models.htm>
+            - Deploying Models  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Model_Lifecycle/Deploying_Models.htm>
+            - Configuring Models  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Model_Lifecycle/Configuring_Models.htm>
+    - Overview of NLP Models  <Working_with_Smart_Bot/Overview_of_NLP_Models.htm>
+        - NLP Model Lifecycle  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/NLP_Model_Extraction/Model_Lifecycle.htm>
+    - Classification Overview  <Working_with_Smart_Bot/Classification/Classification.htm>
+        - Text Classification  <Working_with_Smart_Bot/Classification/Text_Classification/Text_Classification.htm>
+            - Creating New Text Classification Model  <Working_with_Smart_Bot/Classification/Text_Classification/Creating_New_Text_Classification_Model.htm>
+            - Classifying Text using Pretrained Model  <Working_with_Smart_Bot/Classification/Text_Classification/Classifying_Text_using_Pretrained_Model.htm>
+            - Exporting/Importing/Migrating Pretrained Models  <Working_with_Smart_Bot/Classification/Text_Classification/Exporting_Importing_Migrating_Pretrained_Models.htm>
+            - Pretrained Text Classifier Models  <Working_with_Smart_Bot/Classification/Text_Classification/Pretrained_Text_Classifier_Models.htm>
+        - Image Classification  <Working_with_Smart_Bot/Classification/Image_Classification/Image_Classification.htm>
+            - Creating New Image Classification Model  <Working_with_Smart_Bot/Classification/Image_Classification/Creating_New_Image_Classification_Model.htm>
+            - Classifying Model using Image Classification Model  <Working_with_Smart_Bot/Classification/Image_Classification/Classifying_Model_using_Image_Classification_Model.htm>
+            - Exporting/Importing Image Classification Models  <Working_with_Smart_Bot/Classification/Image_Classification/Exporting_Importing_Image_Classification_Models.htm>
+        - Search Based Classification  <Working_with_Smart_Bot/Classification/Search_Based_Classification/Search_Based_Classification.htm>
+            - Creating New Search Based Classification Model  <Working_with_Smart_Bot/Classification/Search_Based_Classification/Creating_New_Search_Based_Classification_Model.htm>
+            - Editing Search Based Classification Model  <Working_with_Smart_Bot/Classification/Search_Based_Classification/Editing_Search_Based_Classification_Model.htm>
+            - Classifying Content using Search Based Classification Model  <Working_with_Smart_Bot/Classification/Search_Based_Classification/Classifying_Content_using_Search_Based_Classification_Model.htm>
+            - Exporting/Importing Search Based Classification Model  <Working_with_Smart_Bot/Classification/Search_Based_Classification/Exporting_Importing_Search_Based_Classification_Model.htm>
+    - Data Extraction Overview  <Working_with_Smart_Bot/Data_Extraction/Data_Extraction.htm>
+        - Guided  <Working_with_Smart_Bot/Data_Extraction/Guided.htm>
+            - Guided Template Creation  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Guided_Template_Creation.htm>
+            - Data Extraction using Guided  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Data_Extraction_using_Guided.htm>
+        - Custom Model  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Custom_Model.htm>
+            - Working with Dataset  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Working_with_Dataset.htm>
+                - Adding 6.5 Datasets  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Working_with_Dataset/Adding_6.htm>
+                - Adding 7.0 Dataset  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Working_with_Dataset/Adding_7.htm>
+            - Custom Model Template Creation  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Custom_Model_Template_Creation.htm>
+            - Data Extraction using Custom Model  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Data_Extraction_using_Custom_Model.htm>
+        - Out of the Box (Domain)  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Out_of_the_Box_(Domain).htm>
+            - Domain Specific Template Creation  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Domain_Specific_Template_Creation.htm>
+            - Data Extraction using Domain Specific  <Working_with_Smart_Bot/Data_Extraction/Data_Extraction_using_Domain_Specific.htm>
+        - GenAI Based Data Extraction Using VLM  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/GenAI_Based_Data_Extraction/GenAI_Based_Data_Extraction.htm>
+            - GenAI Template Creation  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/GenAI_Based_Data_Extraction/GenAI_Template_Creation.htm>
+            - Data Extraction using GenAI Template  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/GenAI_Based_Data_Extraction/Data_Extraction_using_GenAI_Template.htm>
+        - NLP Model Extraction  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/NLP_Model_Extraction/NLP_Model_Extraction.htm>
+            - Creating New NLP Extraction Model  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/NLP_Model_Extraction/Creating_New_NLP_Extraction_Model.htm>
+            - Extracting Data using Pretrained Models  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/NLP_Model_Extraction/Extracting_Data_using_Pretrained_Models.htm>
+            - Exporting/Importing/Migrating Pretrained Models  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/NLP_Model_Extraction/Exporting_Importing_Migrating_Pretrained_Models.htm>
+            - Pretrained NLP Extraction Models  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/NLP_Model_Extraction/Pretrained_NLP_Extraction_Models.htm>
+        - Search Based Extraction  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Search_Based_Extraction/Search_Based_Extraction.htm>
+            - Creating New Search Based Extraction Model  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Search_Based_Extraction/Creating_New_Search_Based_Extraction_Model.htm>
+            - Editing a Search Based Extraction Model  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Search_Based_Extraction/Editing_a_Search_Based_Extraction_Model.htm>
+            - Extracting Data using Pretrained Search Based Extraction Model  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Search_Based_Extraction/Extracting_Data_using_Pretrained_Search_Based_Extraction_Model.htm>
+            - Exporting/Importing Search Based Extraction Model  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Search_Based_Extraction/Exporting_Importing_Search_Based_Extraction_Model.htm>
+        - Post Processing  <Working_with_Smart_Bot/Data_Extraction/Post_Processing/Post_Processing.htm>
+            - Using Adapters  <Working_with_Smart_Bot/Data_Extraction/Post_Processing/Using_Adapters.htm>
+            - Using Templates  <Working_with_Smart_Bot/Data_Extraction/Post_Processing/Using_Templates.htm>
+        - Verifying Extraction using Maker Checker Screen  <Working_with_Smart_Bot/Data_Extraction/Verifying_Extraction_using_MakerChecker_Screen.htm>
+        - Guidelines to Prepare Datasets  <Working_with_Smart_Bot/Guidelines_to_Prepare_Datasets.htm>
+    - Migrating Models  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Migrating_Models.htm>
+        - Upgrading Portlet  <Working_with_Smart_Bot/Data_Extraction/CV_Model_Extraction/Portlet_Upgradation.htm>
+    - Predictive Analysis Overview  <Working_with_Smart_Bot/Predictive_Analysis/Predictive_Analysis.htm>
+        - Creating New Predictive Analysis Model  <Working_with_Smart_Bot/Predictive_Analysis/Creating_New_Predictive_Analysis_Model.htm>
+        - Exporting/Importing/Migrating Pretrained Predictive Analysis Model  <Working_with_Smart_Bot/Predictive_Analysis/Exporting_Importing_Migrating_Pretrained_Predictive_Analysis_Model.htm>
+        - Predicting using Pretrained Predictive Analysis Model  <Working_with_Smart_Bot/Predictive_Analysis/Predicting_using_Pretrained_Predictive_Analysis_Model.htm>
+        - PreTrained Predictive Analysis Models  <Working_with_Smart_Bot/Predictive_Analysis/PreTrained_Predictive_Analysis_Models.htm>
+    - Working with Text Summarization  <Working_with_Smart_Bot/Working_with_Text_Summarization/Working_with_Text_Summarization.htm>
+        - Using Text Summarization  <Working_with_Smart_Bot/Working_with_Text_Summarization/Using_Text_Summarization.htm>
+    - Working with Text Clustering  <Working_with_Smart_Bot/Working_with_Text_Clustering/Working_with_Text_Clustering.htm>
+        - Creating New Text Cluster  <Working_with_Smart_Bot/Working_with_Text_Clustering/Creating_New_Text_Cluster.htm>
+    - Generative AI Use Cases  <Working_with_Smart_Bot/Other_Use_Cases_of_Generative_AI/Other_Use_Cases_of_Generative_AI.htm>
+        - Generative AI - Classification  <Working_with_Smart_Bot/Classification/Using_Generative_AI.htm>
+        - Generative AI - Data Extraction  <Working_with_Smart_Bot/Data_Extraction/Using_Generative_AI.htm>
+        - Generative AI - Sentiment Analysis  <Working_with_Smart_Bot/Other_Use_Cases_of_Generative_AI/Generative_AI_-_Sentiment_Analysis.htm>
+        - Generative AI - Text Summarization  <Working_with_Smart_Bot/Other_Use_Cases_of_Generative_AI/Generative_AI_-_Text_Summarization.htm>
+        - Generative AI - Grammar Correction  <Working_with_Smart_Bot/Other_Use_Cases_of_Generative_AI/Generative_AI_-_Grammar_Correction.htm>
+        - Generative AI - Translation  <Working_with_Smart_Bot/Other_Use_Cases_of_Generative_AI/Generative_AI_-_Translation.htm>
+        - Generative AI - Document Comparison  <Working_with_Smart_Bot/Other_Use_Cases_of_Generative_AI/Generative_AI_-_Document_Comparison.htm>
+        - Generative AI - Document Query  <Working_with_Smart_Bot/Other_Use_Cases_of_Generative_AI/Generative_AI_-_Document_Query.htm>
+        - Generative AI - Email Generation  <Working_with_Smart_Bot/Other_Use_Cases_of_Generative_AI/Generative_AI_-_Email_Generation.htm>
+    - Working with Nividous Library  <Working_with_Smart_Bot/Working_with_Nividous_RPA_Library/Working_with_Nividous_RPA_Library.htm>
+        - Using CV Library from Nividous RPA  <Working_with_Smart_Bot/Working_with_Nividous_RPA_Library/Using_CV_Library_from_Nividous_RPA.htm>
+        - Using NLP Library from Nividous RPA  <Working_with_Smart_Bot/Working_with_Nividous_RPA_Library/Using_NLP_Library_from_Nividous_RPA.htm>
+    - Configurations  <Working_with_Smart_Bot/Configurations/Configurations.htm>
+        - SB Server Configuration through Control Center  <Working_with_Smart_Bot/Configurations/SB_Server_Configuration_through_CC.htm>
+        - OCR Engine Configuration  <Working_with_Smart_Bot/Configurations/OCR_Engine_Configuration.htm>
+        - Cloud Storage Provider Configuration  <Working_with_Smart_Bot/Configurations/Cloud_Storage_Provider_Configuration.htm>
+- Working with Document Processor  <Working_with_Document_Processor/Working_with_Document_Processor.htm>
+    - RPA and BPM Process Deployment  <Working_with_Document_Processor/RPA_BPM_Process_Deployment.htm>
+    - Server Configuration  <Working_with_Document_Processor/Server_Configuration.htm>
+    - Email Configuration  <Working_with_Document_Processor/Email_Configuration.htm>
+    - Creating New Configuration  <Working_with_Document_Processor/Creating_New_Configuration/Creating_New_Configuration.htm>
+        - Adding Basic Details  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Basic_Details.htm>
+        - Adding Document Sources  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Document_Sources.htm>
+        - Adding Document Type  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Document_Type.htm>
+        - Adding Advanced Settings  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Advanced_Settings.htm>
+        - Adding Steps  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Steps/Adding_Steps.htm>
+            - Crop Individual Pages  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Steps/Crop_Individual_Pages.htm>
+            - Straighten Pages  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Steps/Straighten_Pages.htm>
+            - Classify Document  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Steps/Classify_Document.htm>
+            - Split Files into Logical Documents  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Steps/Split_Files_into_Logical_Documents.htm>
+            - Extract Information  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Steps/Extract_Information.htm>
+            - Integrate with Other Processes  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Steps/Integrate_with_Other_Processes.htm>
+            - Custom Step  <Working_with_Document_Processor/Creating_New_Configuration/Adding_Steps/Custom_Step.htm>
+    - Scheduling Configuration  <Working_with_Document_Processor/Scheduling_Configuration.htm>
+- Working with Document Repository  <Working_with_Document_Repository/Working_with_Document_Repository.htm>
+    - Managing Documents  <Working_with_Document_Repository/Managing_Documents.htm>
+- Working with BRMS  <Working_with_BRMS/Working_with_BRMS.htm>
+    - Unloading and Deploying Business Rules  <Working_with_BRMS/Unloading_and_Deploying_Business_Rules.htm>
+    - Preparing Business Rules  <Working_with_BRMS/Preparing_Business_Rules.htm>
+    - Managing Business Rules  <Working_with_BRMS/Managing_Business_Rules.htm>
+    - Integrating APIs  <Working_with_BRMS/Integrating_APIs.htm>

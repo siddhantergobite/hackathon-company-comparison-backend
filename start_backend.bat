@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-echo === AI Creative Studio Backend (port 8765) ===
+echo === Company Intelligence Casefile Backend (port 8765) ===
 cd /d "%~dp0"
 set PYTHONPATH=%~dp0
 set PYTHONIOENCODING=utf-8

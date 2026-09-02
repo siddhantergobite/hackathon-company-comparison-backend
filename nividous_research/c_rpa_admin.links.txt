@@ -1,0 +1,36 @@
+  ->  https://community.nividous.com/
+Knowledge Base  ->  https://community.nividous.com/knowledge-base-2/
+Forum  ->  https://community.nividous.com/forums/
+Global Forum  ->  https://community.nividous.com/forums/
+Nividous Forum  ->  https://community.nividous.com/nividous-forum/
+Learning  ->  https://community.nividous.com/learning/
+Download Resources  ->  https://community.nividous.com/download-resources/
+Amol Agnihotri  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+My Courses  ->  https://community.nividous.com/profile/amol-aergobite-com/my-courses/
+My Orders  ->  https://community.nividous.com/profile/amol-aergobite-com/orders/
+My Certificates  ->  https://community.nividous.com/profile/amol-aergobite-com/certificates/
+Edit Profile  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+Logout  ->  https://community.nividous.com/back-admin/?action=logout&#38;redirect_to=https%3A%2F%2Fcommunity.nividous.com&#38;_wpnonce=9c46897254
+1.1Course Overview  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/overview/
+1.2Introduction to RPA Administration  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/introduction/
+2.1RPA Process Life Cycle  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/control-center-setup-and-configuration/
+3.1Control Center Setup and Configuration  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/bot-setup-and-configuration/
+3.2Bot Setup and Configuration  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/setup-and-configuration-bot/
+4.1User Management  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/resource-administration/
+5.1Access Control Management  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/access-control-management/
+6.1Exercise-1.1  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/course-awareness-quiz/
+6.2Solution-1.1  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/solution-1-1-3/
+7.1RPA Administration Quiz-110 Minutes10 Questions  ->  https://community.nividous.com/course/nividous-rpa-administration/quizzes/rpa-essentials-quiz-1-copy-2/
+8.1Process Deployment and Scheduling  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/nividous-rpa-life-cycle/
+9.1Process Monitoring and Bot Administration  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/process-monitoring-and-bot-administration/
+10.1Vault Function  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/vault-function/
+11.1Best Practices  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/best-practices-2/
+12.1Exercise-1.2  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/exercise-1-2-4/
+12.2Solution-1.2  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/solution-1-2-2/
+13.1RPA Administration Quiz-220 Minutes20 Questions  ->  https://community.nividous.com/course/nividous-rpa-administration/quizzes/rpa-essentials-quiz-2-copy-2/
+14.1Survey  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/survey/
+15.1Course Certificate  ->  https://community.nividous.com/course/nividous-rpa-administration/lessons/rpa-adminstration-course-certificate-2/
+admin  ->  https://community.nividous.com/nividous-rpa-administration/admin/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-administration/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-advanced/
+Yes  ->  https://community.nividous.com/course/rpa-essentials/

@@ -1,0 +1,38 @@
+  ->  https://community.nividous.com/
+Knowledge Base  ->  https://community.nividous.com/knowledge-base-2/
+Forum  ->  https://community.nividous.com/forums/
+Global Forum  ->  https://community.nividous.com/forums/
+Nividous Forum  ->  https://community.nividous.com/nividous-forum/
+Learning  ->  https://community.nividous.com/learning/
+Download Resources  ->  https://community.nividous.com/download-resources/
+Amol Agnihotri  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+My Courses  ->  https://community.nividous.com/profile/amol-aergobite-com/my-courses/
+My Orders  ->  https://community.nividous.com/profile/amol-aergobite-com/orders/
+My Certificates  ->  https://community.nividous.com/profile/amol-aergobite-com/certificates/
+Edit Profile  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+Logout  ->  https://community.nividous.com/back-admin/?action=logout&#38;redirect_to=https%3A%2F%2Fcommunity.nividous.com&#38;_wpnonce=9c46897254
+Home  ->  https://community.nividous.com/
+Installation Help >  ->  https://community.nividous.com/knowledge-base-detail/studio-installation-help/?v=Studio-Installation-Help/home.htm
+RPA Help >  ->  https://community.nividous.com/knowledge-base-detail/nividous-rpa-help/?v=Nividous-RPA-Help/index.htm
+LPA Help >  ->  https://community.nividous.com/knowledge-base-detail/nividous-lpa-help/?v=Nividous-LPA-Help/index.htm
+Best Practices >  ->  https://community.nividous.com/knowledge-base-detail/best-practices/
+Installation Help >  ->  https://community.nividous.com/knowledge-base-detail/control-center-installation-help/?v=CC-Installation-Help/home.htm
+Control Center Help >  ->  https://community.nividous.com/knowledge-base-detail/control-center-help/?v=CC-Help/home.htm
+API Help >  ->  https://community.nividous.com/knowledge-base-detail/cc-api-help/
+Bot Installation Help >  ->  https://community.nividous.com/knowledge-base-detail/bot-installation-help/?v=Bot-Installation-Help/home.htm
+Smart Bot Help >  ->  https://community.nividous.com/knowledge-base-detail/smart-bot-help/
+API Help >  ->  https://community.nividous.com/knowledge-base-detail/smart-bot-api-help/
+API Help >  ->  https://community.nividous.com/knowledge-base-detail/api-documentation/?v=API-Help/home.htm
+RPA Quick Start >  ->  https://community.nividous.com/knowledge-base-detail/nividous-rpa-quick-start/?v=RPA-Quick-Start/home.htm
+LPA Quick Start >  ->  https://community.nividous.com/knowledge-base-detail/nividous-lpa-quick-start/?v=LPA-Quick-Start/home.htm
+RPA Infrastructure Help >  ->  https://community.nividous.com/knowledge-base-detail/rpa-infrastructure-help/?v=Infrastructure-Help/home.htm
+Not able to launch Studio  ->  https://community.nividous.com/knowledge-base/not-able-to-run-rpa-exe-of-studio/
+Best Practices in process designing  ->  https://community.nividous.com/knowledge-base/points-should-be-taken-care-of-while-developing-the-rpa-process-in-the-diagram-editor/
+External library in Studio  ->  https://community.nividous.com/knowledge-base/external-library-in-rpa-studio/
+Delay in Process Execution  ->  https://community.nividous.com/knowledge-base/delay-in-process-execution/
+Using upgraded version for existing library in Bot/Studio  ->  https://community.nividous.com/knowledge-base/using-upgraded-version-for-existing-library-in-bot-studio/
+How to handle captcha  ->  https://community.nividous.com/knowledge-base/how-to-handle-captcha/
+Load More  ->  https://community.nividous.com/knowledge-base-detail/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-administration/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-advanced/
+Yes  ->  https://community.nividous.com/course/rpa-essentials/

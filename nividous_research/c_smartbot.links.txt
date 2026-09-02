@@ -1,0 +1,35 @@
+  ->  https://community.nividous.com/
+Knowledge Base  ->  https://community.nividous.com/knowledge-base-2/
+Forum  ->  https://community.nividous.com/forums/
+Global Forum  ->  https://community.nividous.com/forums/
+Nividous Forum  ->  https://community.nividous.com/nividous-forum/
+Learning  ->  https://community.nividous.com/learning/
+Download Resources  ->  https://community.nividous.com/download-resources/
+Amol Agnihotri  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+My Courses  ->  https://community.nividous.com/profile/amol-aergobite-com/my-courses/
+My Orders  ->  https://community.nividous.com/profile/amol-aergobite-com/orders/
+My Certificates  ->  https://community.nividous.com/profile/amol-aergobite-com/certificates/
+Edit Profile  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+Logout  ->  https://community.nividous.com/back-admin/?action=logout&#38;redirect_to=https%3A%2F%2Fcommunity.nividous.com&#38;_wpnonce=9c46897254
+1.1Course Overview  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/course-overview-smart-bot/
+1.2Course Instructions  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/sb-essential-course-instructions/
+2.1Introduction to Smart Bot  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/introduction-smart-bot/
+3.1Installation and Setup Smart Bot  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/installation-smart-bot/
+4.1Smart Bot RPA Libraries  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/smart-bot-rpa-librraies/
+5.1Text Classification  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/text-classification/
+5.2Image Classification  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/image-classification/
+5.3Search Based Classification  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/search-based-classification/
+6.1Exercise -1.12 Days  ->  https://community.nividous.com/course/smart-bot-essential-course/assignments/sb-exercise/
+7.1Quiz-110 Minutes10 Questions  ->  https://community.nividous.com/course/smart-bot-essential-course/quizzes/quiz1/
+8.1CV-Template Based Recognition  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/cv-template-recognition/
+8.2Datasets and Models  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/cv-datasets-and-models/
+8.3NLP Entity Recognition  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/nlp-text-extraction/
+8.4Search-Based Entity Recognition  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/seach-based-extraction/
+9.1Predictive Analysis  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/predictive-analysis/
+10.1Exercise–1.22 Days  ->  https://community.nividous.com/course/smart-bot-essential-course/assignments/sb-exercise-2/
+11.1Quiz-220 Minutes20 Questions  ->  https://community.nividous.com/course/smart-bot-essential-course/quizzes/bpm-essential-quiz-2-copy/
+12.1We Value Your Feedback!  ->  https://community.nividous.com/course/smart-bot-essential-course/lessons/smart-bot-survey/
+Chetan Sindhi  ->  https://community.nividous.com/smart-bot-essential-course/chetan-sindhinividous-com/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-administration/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-advanced/
+Yes  ->  https://community.nividous.com/course/rpa-essentials/

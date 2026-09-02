@@ -1,10 +1,10 @@
-# AI Creative Studio
+# Company Intelligence Casefile + AEO/GEO
 
-Full-stack AI platform for **social media content creation** and **company intelligence research**.
+Backend + Casefile UI for brochure intake, target company research, compare & pitch, outreach, PDF export, and AEO/GEO audits.
 
-- Frontend: Streamlit (`http://localhost:8501`)
-- Backend: FastAPI (`http://localhost:8765`)
-    Models: Azure OpenAI (`gpt-5-mini`), Together AI FLUX, Gemini image fallback
+- **API:** FastAPI on `http://127.0.0.1:8765`
+- **UI:** `http://127.0.0.1:8765/casefile/`
+- **LLM:** Azure OpenAI primary (`gpt-5-mini`); Groq / Gemini optional fallbacks
 
 ---
 
@@ -18,180 +18,80 @@ pip install -r requirements.txt
 
 ### 2. Configure `.env`
 
+Copy `.env.example` → `.env` and set:
+
 ```env
 AZURE_OPENAI_ENDPOINT=https://YOUR.openai.azure.com/openai/v1
 AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_MODEL=gpt-5-mini
-GEMINI_API_KEY=AQ....         # image generation fallback
-GROQ_API_KEY=gsk_...          # optional LLM fallback
-TOGETHER_API_KEY=...          # optional — better image quality
-HF_TOKEN=hf_...               # optional
+GROQ_API_KEY=           # optional
+GEMINI_API_KEY=         # optional text fallback
+SERPAPI_KEY=            # optional AEO SERP checks
+RESEARCH_USE_GROQ=0
 ```
 
-### 3. Run
+### 3. Run backend
 
-**Terminal 1 — Backend**
 ```bash
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
 ```
+
 Or double-click `start_backend.bat`
 
-**Terminal 2 — Frontend**
-```bash
-streamlit run app.py --server.port 8501
-```
-Or double-click `start_frontend.bat`
-
-Open: **http://localhost:8501**
+Open: **http://127.0.0.1:8765/casefile/**
 
 ---
 
-## Features
+## Casefile exhibits
 
-### Image Tools
-| Tool | Engine |
-|------|--------|
-| Text to Image | Together FLUX.1-Schnell / SDXL + Groq prompt enhance |
-| Image to Image | InstructPix2Pix |
-| Remove Background | BiRefNet / rembg |
-| Upscale | Lanczos + sharpening |
-| Face Swap | InsightFace + OpenCV seamless clone |
-| Product Shot / Outfit / Headshot | Local PIL pipelines |
-
-### Video Tools
-| Tool | Engine |
-|------|--------|
-| Text to Video | Pollinations / HF |
-| Image to Video | Local frame animation |
-| Lip Sync | LatentSync / SadTalker (HF Spaces) |
-| Video Clips / Motion | moviepy / OpenCV |
-
-### Content Tools
-| Tool | Engine |
-|------|--------|
-| Caption Generator | Groq Llama 3.3-70B |
-| Hashtag Generator | Groq Llama 3.3-70B |
-| Caption + Image | Groq + FLUX |
-| Bulk Schedule via AI | Groq calendar JSON |
-| Smart Scheduling via AI | Groq timing strategy |
-
-### Research — Company Intelligence
-Paste any company URL → full multi-source intelligence report.
-
-**MCP-style pipeline (multi-agent — scrapes MANY public sites, not one):**
-```
-URL
- │
- ├─ Site Agent         → company website + footer + /about /products /contact
- ├─ Search Agent       → find URLs on ZaubaCorp, Tofler, AmbitionBox, Glassdoor,
- │                       Justdial, IndiaMART, LinkedIn, Crunchbase, news, etc.
- ├─ Scrape Agent       → VISIT each public URL and scrape full page text + contacts
- ├─ Merge Agent        → combine emails/phones/facts from every site scraped
- ├─ Citation Agent     → Perplexity-style favicons for every site visited
- └─ Analysis Agent     → Groq openai/gpt-oss-120b → structured JSON report
-```
-
-**Report tabs:** Overview · Competitors · People & Culture · News · SWOT · Content Strategy · Risk & Finance · **Contacts**
-
-**Contacts extraction (verified, not AI-guessed):**
-- Homepage **footer** (“Get In Touch” blocks)
-- `/contact`, `/contact-us`, `/get-in-touch` pages
-- `mailto:` / `tel:` links
-- Person name next to phone (e.g. `Suresh Shriyan: +91 98672 00065`)
-- Emails with person + department labels
-- Office addresses (Mumbai HQ, branch offices, etc.)
-
-**Citations:** overlapping favicons + “N sources” → expandable source cards with clickable URLs.
-
-**Anti-hallucination rules:**
-- Leadership only from ZaubaCorp directors (never from website quotes)
-- Contacts injected from scraper directly (LLM cannot invent or erase them)
-- Missing data → `Not publicly available` (never fabricated)
+| Exhibit | Purpose |
+|---------|---------|
+| A — Brochure | Upload PDF/DOCX/image or search your company |
+| B — Target Company | Research a public company URL |
+| F — AEO / GEO | Answer-engine & generative-engine visibility audit |
+| C — Compare & Pitch | Gap analysis + outreach pitch |
+| D — Outreach | Message drafts from pitch |
+| E — Download PDF | Full casefile export |
 
 ---
 
-## Architecture
+## API
+
+| Method | Path | Role |
+|--------|------|------|
+| GET | `/health` | Health + LLM status |
+| GET | `/api/llm-status` | Key / model diagnostics (`?probe=1`) |
+| POST | `/api/brochure-upload` | Brochure file → profile |
+| POST | `/api/brochure-search` | Company name → profile |
+| POST | `/api/company-research` | `{ "url": "..." }` → target report |
+| POST | `/api/aeo-geo-audit` | `{ "url": "..." }` → AEO/GEO audit |
+| POST | `/api/generate-pitch` | Brochure + target → pitch |
+| POST | `/api/export-pdf` | Brochure + target + pitch → PDF |
+
+---
+
+## Layout
 
 ```
-Hackathon/
-├── app.py                          # Streamlit UI
-├── .env                            # API keys
-├── requirements.txt
+├── backend/
+│   ├── main.py                 # FastAPI app
+│   └── services/
+│       ├── brochure_extract.py
+│       ├── company_research.py
+│       ├── aeo_geo.py
+│       ├── pitch_generator.py
+│       ├── pdf_export.py
+│       ├── llm.py
+│       └── llm_judge.py
+├── casefile/                   # Exhibit A–F UI
 ├── start_backend.bat
-├── start_frontend.bat
-├── AI_Models_Guide.xlsx
-└── backend/
-    ├── main.py                     # FastAPI routes
-    └── services/
-        ├── company_research.py     # Multi-source intelligence engine
-        ├── text_to_image.py
-        ├── image_to_image.py
-        ├── caption_generator.py
-        ├── hashtag_generator.py
-        ├── caption_image.py
-        ├── bulk_schedule.py
-        ├── smart_schedule.py
-        ├── gemini_service.py       # Groq + Gemini helpers
-        ├── prompt_engine.py
-        ├── image_utils.py
-        ├── face_swap.py
-        ├── lip_sync.py
-        └── ...
+├── requirements.txt
+└── .env.example
 ```
 
 ---
 
-## Key API Endpoints
+## Notes
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | Backend health |
-| POST | `/api/text-to-image` | Generate image |
-| POST | `/api/caption-generator` | Captions |
-| POST | `/api/hashtag-generator` | Hashtags |
-| POST | `/api/caption-image` | Caption + image |
-| POST | `/api/bulk-schedule` | Content calendar |
-| POST | `/api/smart-schedule` | Posting times |
-| POST | `/api/company-research` | Company intelligence (`{"url":"..."}`) |
-
----
-
-## Company Intelligence — Sources Checked
-
-| Source | What it provides |
-|--------|------------------|
-| Company website | Products, about, footer contacts, tech hints |
-| Sub-pages | `/about`, `/products`, `/pricing`, `/careers`, `/team` |
-| ZaubaCorp (MCA) | CIN, directors, capital, status, registered address |
-| DuckDuckGo (20+ queries) | Competitors, funding, news, employees, contacts |
-| Wikipedia | Company history |
-| News articles | Full-text scrape of top results |
-| Social links | LinkedIn, Instagram, Facebook, etc. |
-
-Every claim in the UI shows **source + confidence** (High / Medium / Low).
-
----
-
-## Troubleshooting
-
-| Issue | Fix |
-|-------|-----|
-| `Failed to fetch dynamically imported module` | Kill all Streamlit processes, restart once, hard-refresh (`Ctrl+Shift+R`) |
-| Backend offline | Start uvicorn on port **8765** |
-| Contacts empty | Re-run research — contacts come from homepage footer + contact pages |
-| 422 on company-research | Body must be JSON: `{"url":"https://..."}` |
-| Groq errors | Check `GROQ_API_KEY` in `.env` |
-
-```bash
-# Clean restart (Windows PowerShell)
-taskkill /F /IM streamlit.exe
-taskkill /F /IM uvicorn.exe
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
-streamlit run app.py --server.port 8501
-```
-
----
-
-## License
-
-Built for hackathon / internal demo use.
+- Research uses public web sources only (no CIN/MCA path).
+- Social-media creative studio (Streamlit image/video tools) was removed; this repo is Casefile + AEO/GEO only.

@@ -95,7 +95,11 @@
   /* ---------- Tabs ---------- */
   nav.tabs{
     display:flex;
+    flex-wrap:wrap;
     gap:2px;
+    overflow-x:auto;
+    padding-bottom:2px;
+    -webkit-overflow-scrolling:touch;
   }
   .tab-btn{
     font-family:var(--font-mono);
@@ -105,12 +109,13 @@
     color:#A9A190;
     border:none;
     border-bottom:2px solid transparent;
-    padding:12px 18px 14px 18px;
+    padding:12px 14px 14px 14px;
     cursor:pointer;
     display:flex;
     flex-direction:column;
     gap:3px;
     transition:color .15s ease, border-color .15s ease;
+    flex:0 0 auto;
   }
   .tab-btn .exhibit-label{
     text-transform:uppercase;
@@ -303,6 +308,7 @@
   .dot{width:7px;height:7px;border-radius:50%;background:var(--teal);}
 
   .index-card{
+    scroll-margin-top: 24px;
     padding:22px 24px;
     margin-bottom:16px;
   }
@@ -367,9 +373,9 @@
     margin-top:2px;
   }
 
-  .three-col{
+    .three-col{
     display:grid;
-    grid-template-columns:1fr 1fr 1fr;
+    grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
     gap:20px;
   }
   .stat-card{padding:20px;}
@@ -589,11 +595,21 @@
     padding:14px 18px;margin-bottom:16px;
     background:#FBF9F3;border:1px solid var(--rule);border-radius:3px;
   }
-  .citation-stack{position:relative;height:24px;width:70px;flex-shrink:0;}
+  .citation-stack{position:relative;height:24px;flex-shrink:0;}
+  .citation-stack a{
+    position:absolute;top:0;display:block;width:22px;height:22px;
+    border-radius:50%;z-index:1;
+  }
+  .citation-stack a:hover{z-index:5;}
   .citation-stack img{
     width:22px;height:22px;border-radius:50%;border:2px solid #fff;
-    position:absolute;top:0;background:#e2e8f0;object-fit:cover;
+    background:#e2e8f0;object-fit:cover;display:block;
   }
+  .citation-count-link{
+    font-family:var(--font-mono);font-size:12px;color:var(--teal);
+    font-weight:600;text-decoration:none;cursor:pointer;
+  }
+  .citation-count-link:hover{text-decoration:underline;}
   .citation-card{
     display:flex;gap:10px;align-items:flex-start;
     padding:10px 0;border-bottom:1px solid var(--rule);font-size:13px;
@@ -701,6 +717,10 @@
       <span class="exhibit-label">Exhibit B</span>
       <span class="exhibit-title">Target Company</span>
     </button>
+    <button class="tab-btn" data-view="v6" onclick="showView('v6', this)" title="Answer Engine Optimization / Generative Engine Optimization audit">
+      <span class="exhibit-label">Exhibit F</span>
+      <span class="exhibit-title">AEO / GEO</span>
+    </button>
     <button class="tab-btn" data-view="v3" onclick="showView('v3', this)">
       <span class="exhibit-label">Exhibit C</span>
       <span class="exhibit-title">Compare &amp; Pitch</span>
@@ -712,10 +732,6 @@
     <button class="tab-btn" data-view="v5" onclick="showView('v5', this)">
       <span class="exhibit-label">Exhibit E</span>
       <span class="exhibit-title">Download PDF</span>
-    </button>
-    <button class="tab-btn" data-view="v6" onclick="showView('v6', this)">
-      <span class="exhibit-label">Exhibit F</span>
-      <span class="exhibit-title">AEO / GEO</span>
     </button>
   </nav>
 </header>
@@ -823,12 +839,31 @@
 
     <div class="citations-bar" id="citations-bar" style="display:none;">
       <div class="citation-stack" id="citation-stack"></div>
-      <span id="citation-count-label">0 sources</span>
+      <a class="citation-count-link" id="citation-count-label" href="#citation-cards">0 sources</a>
     </div>
 
     <div class="kpi-row" id="target-kpis"></div>
 
     <div class="confidence-bar" id="target-confidence" style="display:none;"></div>
+
+    <div class="three-col" style="margin-top:16px;">
+      <div class="card stat-card">
+        <span class="field-label">Leadership</span>
+        <div id="target-leadership"><span class="field-value">—</span></div>
+      </div>
+      <div class="card stat-card">
+        <span class="field-label">Current hiring</span>
+        <div id="target-hiring"><span class="field-value">—</span></div>
+      </div>
+      <div class="card stat-card">
+        <span class="field-label">Point of contact</span>
+        <div id="target-poc"><span class="field-value">—</span></div>
+      </div>
+      <div class="card stat-card">
+        <span class="field-label">Intelligence score</span>
+        <p class="field-value" id="target-score">—</p>
+      </div>
+    </div>
 
     <nav class="intel-tabs" id="intel-tabs">
       <button class="intel-tab active" type="button" onclick="showIntelTab('intel-overview',this)">Overview</button>
@@ -849,28 +884,6 @@
     <div id="intel-content" class="intel-panel card"></div>
     <div id="intel-risk" class="intel-panel card"></div>
     <div id="intel-contacts" class="intel-panel card"></div>
-
-    <div class="three-col" style="margin-top:24px;">
-      <div class="card stat-card">
-        <span class="field-label">Leadership</span>
-        <div id="target-leadership"><span class="field-value">—</span></div>
-      </div>
-      <div class="card stat-card">
-        <span class="field-label">Point of contact</span>
-        <div id="target-poc"><span class="field-value">—</span></div>
-      </div>
-      <div class="card stat-card">
-        <span class="field-label">Intelligence score</span>
-        <p class="field-value" id="target-score">—</p>
-      </div>
-    </div>
-
-    <div class="card index-card" style="margin-top:24px;">
-      <h4>Current hiring status</h4>
-      <ul class="hiring-list" id="target-hiring">
-        <li><span class="role">Run search above</span></li>
-      </ul>
-    </div>
 
     <div class="card analysis-box">
       <span class="field-label">AI conclusion</span>
@@ -1030,7 +1043,9 @@
       <input type="text" id="aeo-keywords-input" placeholder="Optional topics (comma-separated) — leave blank to auto-suggest">
     </div>
     <p id="aeo-empty" class="field-value" style="color:var(--text-muted);margin-bottom:24px;">
-      Tip: leave topics blank for auto suggestions. Uses free DuckDuckGo by default.
+      Tip: leave topics blank for auto suggestions. Backend endpoint:
+      <code style="font-family:var(--font-mono);font-size:12px;">POST /api/aeo-geo-audit</code>
+      — DuckDuckGo by default (no Groq required; uses Azure when LLM is needed).
     </p>
 
     <div id="aeo-content" style="display:none;">
@@ -1093,7 +1108,7 @@
     document.getElementById(id).classList.toggle('open');
   }
 </script>
-<script src="app.js?v=19"></script>
+<script src="app.js?v=20"></script>
 
 </body>
 </html>

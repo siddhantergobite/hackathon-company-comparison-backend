@@ -1,0 +1,29 @@
+  ->  https://community.nividous.com/
+Knowledge Base  ->  https://community.nividous.com/knowledge-base-2/
+Forum  ->  https://community.nividous.com/forums/
+Global Forum  ->  https://community.nividous.com/forums/
+Nividous Forum  ->  https://community.nividous.com/nividous-forum/
+Learning  ->  https://community.nividous.com/learning/
+Download Resources  ->  https://community.nividous.com/download-resources/
+Amol Agnihotri  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+My Courses  ->  https://community.nividous.com/profile/amol-aergobite-com/my-courses/
+My Orders  ->  https://community.nividous.com/profile/amol-aergobite-com/orders/
+My Certificates  ->  https://community.nividous.com/profile/amol-aergobite-com/certificates/
+Edit Profile  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+Logout  ->  https://community.nividous.com/back-admin/?action=logout&#38;redirect_to=https%3A%2F%2Fcommunity.nividous.com&#38;_wpnonce=9c46897254
+1.1Course Overview  ->  https://community.nividous.com/course/idp-7-5/lessons/course-overview-idp/
+2.1Additional Configuration Settings  ->  https://community.nividous.com/course/idp-7-5/lessons/additional-setup-requirements/
+2.2Best Practices  ->  https://community.nividous.com/course/idp-7-5/lessons/idp-best-practices/
+3.1Introduction to IDP  ->  https://community.nividous.com/course/idp-7-5/lessons/introduction-idp/
+3.2Server Master Configuration  ->  https://community.nividous.com/course/idp-7-5/lessons/server-configuration-idp/
+3.3Project Master Configuration  ->  https://community.nividous.com/course/idp-7-5/lessons/project-configuration-idp/
+3.4Pipeline Settings Configuration  ->  https://community.nividous.com/course/idp-7-5/lessons/pipeline-settings-configuration-idp/
+3.5Execution and Notifications  ->  https://community.nividous.com/course/idp-7-5/lessons/execution-and-notifications-idp/
+4.1Quiz10 Minutes10 Questions  ->  https://community.nividous.com/course/idp-7-5/quizzes/quiz-1-idp/
+5.1Exercise2 Days  ->  https://community.nividous.com/course/idp-7-5/assignments/exercise-1-1-idp/
+6.1Hands-On Exam3 Days  ->  https://community.nividous.com/course/idp-7-5/assignments/hands-on-exam-idp/
+7.1We Value Your Feedback  ->  https://community.nividous.com/course/idp-7-5/lessons/we-value-your-feedback-idp/
+admin  ->  https://community.nividous.com/idp-7-5/admin/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-administration/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-advanced/
+Yes  ->  https://community.nividous.com/course/rpa-essentials/

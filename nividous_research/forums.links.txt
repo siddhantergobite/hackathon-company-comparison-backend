@@ -1,0 +1,132 @@
+  ->  https://community.nividous.com/
+Knowledge Base  ->  https://community.nividous.com/knowledge-base-2/
+Forum  ->  https://community.nividous.com/forums/
+Global Forum  ->  https://community.nividous.com/forums/
+Nividous Forum  ->  https://community.nividous.com/nividous-forum/
+Learning  ->  https://community.nividous.com/learning/
+Download Resources  ->  https://community.nividous.com/download-resources/
+Amol Agnihotri  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+My Courses  ->  https://community.nividous.com/profile/amol-aergobite-com/my-courses/
+My Orders  ->  https://community.nividous.com/profile/amol-aergobite-com/orders/
+My Certificates  ->  https://community.nividous.com/profile/amol-aergobite-com/certificates/
+Edit Profile  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+Logout  ->  https://community.nividous.com/back-admin/?action=logout&#38;redirect_to=https%3A%2F%2Fcommunity.nividous.com&#38;_wpnonce=9c46897254
+Home  ->  https://community.nividous.com
+Studio  ->  https://community.nividous.com/forum/studio/
+Process Designing (116, 126)  ->  https://community.nividous.com/forum/studio/process-designing/
+Variables and Arguments (119, 129)  ->  https://community.nividous.com/forum/studio/variables-and-arguments/
+Library and Actions (122, 133)  ->  https://community.nividous.com/forum/studio/library-and-actions/
+Data Manipulation (123, 133)  ->  https://community.nividous.com/forum/studio/data-manipulation/
+Desktop Automation (119, 130)  ->  https://community.nividous.com/forum/studio/desktop-automation/
+PDF Automation (118, 128)  ->  https://community.nividous.com/forum/studio/pdf-automation/
+Excel Automation (121, 130)  ->  https://community.nividous.com/forum/studio/excel-automation/
+Web Automation (129, 143)  ->  https://community.nividous.com/forum/studio/web-automation/
+Email Automation (116, 126)  ->  https://community.nividous.com/forum/studio/email-automation/
+Database Automation (118, 128)  ->  https://community.nividous.com/forum/studio/database-automation/
+Image Automation (117, 127)  ->  https://community.nividous.com/forum/studio/image-automation/
+Recorders (117, 127)  ->  https://community.nividous.com/forum/studio/recorders/
+Reusable Components (120, 130)  ->  https://community.nividous.com/forum/studio/reusable-components/
+Custom and External Library (115, 125)  ->  https://community.nividous.com/forum/studio/custom-and-external-library/
+Exception Handling (116, 126)  ->  https://community.nividous.com/forum/studio/exception-handling/
+Installation and Troubleshooting (124, 135)  ->  https://community.nividous.com/forum/studio/installation-and-troubleshooting/
+Other (142, 156)  ->  https://community.nividous.com/forum/studio/other/
+5 years, 2 months ago  ->  https://community.nividous.com/topic/arrange-process-diagram/#post-8521
+Chetan Sindhi  ->  https://community.nividous.com/users/chetan-sindhinividous-com/
+Control Center  ->  https://community.nividous.com/forum/control-center/
+Installation and Troubleshooting (15, 17)  ->  https://community.nividous.com/forum/control-center/installation-and-troubleshooting/
+Process Deployment (17, 18)  ->  https://community.nividous.com/forum/control-center/process-deployment/
+Process Scheduling (14, 15)  ->  https://community.nividous.com/forum/control-center/process-scheduling/
+Process Execution (14, 15)  ->  https://community.nividous.com/forum/control-center/process-execution/
+5 years, 2 months ago  ->  https://community.nividous.com/topic/deploy-process-manually-2/
+Amit Rakhaiya  ->  https://community.nividous.com/users/amit-rakhaiyanividous-com/
+Bot  ->  https://community.nividous.com/forum/bot/
+Process Execution (18, 18)  ->  https://community.nividous.com/forum/bot/process-execution/
+Installation and Troubleshooting (23, 23)  ->  https://community.nividous.com/forum/bot/installation-and-troubleshooting/
+Process Scheduling (19, 19)  ->  https://community.nividous.com/forum/bot/process-scheduling/
+4 years, 11 months ago  ->  https://community.nividous.com/topic/bot-is-not-able-to-read-the-custom-library-actions/#post-12346
+Tuljesh Oza  ->  https://community.nividous.com/users/tuljesh-ozanividous-com/
+Smart Bot  ->  https://community.nividous.com/forum/smart-bot/
+Installation and Troubleshooting (10, 10)  ->  https://community.nividous.com/forum/smart-bot/installation-and-troubleshooting/
+Entity Extraction (11, 11)  ->  https://community.nividous.com/forum/smart-bot/document-extraction/
+Classification (19, 19)  ->  https://community.nividous.com/forum/smart-bot/classification/
+5 years, 2 months ago  ->  https://community.nividous.com/topic/what-are-precision-and-recall/
+admin  ->  https://community.nividous.com/users/admin/
+Studio (Internal)  ->  https://community.nividous.com/forum/studio-internal/
+Internal – Process Designing (46, 42)  ->  https://community.nividous.com/forum/studio-internal/internal-process-designing/
+Internal – Variables and Arguments (44, 41)  ->  https://community.nividous.com/forum/studio-internal/internal-variables-and-arguments/
+Internal – Library and Actions (52, 49)  ->  https://community.nividous.com/forum/studio-internal/internal-library-and-actions/
+Internal – Data Manipulation (42, 39)  ->  https://community.nividous.com/forum/studio-internal/internal-data-manipulation/
+Internal – Desktop Automation (43, 39)  ->  https://community.nividous.com/forum/studio-internal/internal-desktop-automation/
+Internal – PDF Automation (42, 39)  ->  https://community.nividous.com/forum/studio-internal/internal-pdf-automation/
+Internal – Excel Automation (44, 42)  ->  https://community.nividous.com/forum/studio-internal/internal-excel-automation/
+Internal – Web Automation (45, 41)  ->  https://community.nividous.com/forum/studio-internal/internal-web-automation/
+Internal – Email Automation (43, 40)  ->  https://community.nividous.com/forum/studio-internal/internal-email-automation/
+Internal – Database Automation (42, 39)  ->  https://community.nividous.com/forum/studio-internal/internal-database-automation/
+Internal – Image Automation (42, 39)  ->  https://community.nividous.com/forum/studio-internal/internal-image-automation/
+Internal – Recorders (44, 41)  ->  https://community.nividous.com/forum/studio-internal/internal-recorders/
+Internal – Reusable Components (42, 39)  ->  https://community.nividous.com/forum/studio-internal/internal-reusable-components/
+Internal – Custom and External Library (43, 39)  ->  https://community.nividous.com/forum/studio-internal/internal-custom-and-external-library/
+Internal – Exception Handling (42, 39)  ->  https://community.nividous.com/forum/studio-internal/internal-exception-handling/
+Internal – Best Practices (44, 41)  ->  https://community.nividous.com/forum/studio-internal/internal-best-practices/
+Internal – Installation and Troubleshooting (49, 45)  ->  https://community.nividous.com/forum/studio-internal/internal-installation-and-troubleshooting/
+Internal – Other (49, 47)  ->  https://community.nividous.com/forum/studio-internal/internal-other/
+10 months, 1 week ago  ->  https://community.nividous.com/topic/handling-missing-selectors-in-rpa/
+Jyoti Hunka  ->  https://community.nividous.com/users/jyoti-hunkanividous-com/
+Control Center (Internal)  ->  https://community.nividous.com/forum/control-center-internal/
+User Creation and Access Management (18, 15)  ->  https://community.nividous.com/forum/control-center-internal/user-creation-and-access-management/
+Internal – Installation and Troubleshooting (23, 19)  ->  https://community.nividous.com/forum/control-center-internal/internal-installation-and-troubleshooting/
+Internal – Process Deployment (19, 15)  ->  https://community.nividous.com/forum/control-center-internal/internal-process-deployment/
+Internal – Process Scheduling (20, 16)  ->  https://community.nividous.com/forum/control-center-internal/internal-process-scheduling/
+Internal – Process Execution (16, 13)  ->  https://community.nividous.com/forum/control-center-internal/internal-process-execution/
+1 year, 9 months ago  ->  https://community.nividous.com/topic/custom-view-is-not-loading/#post-17534
+Bot (Internal)  ->  https://community.nividous.com/forum/bot-internal/
+Internal – Process Execution (11, 8)  ->  https://community.nividous.com/forum/bot-internal/internal-process-execution/
+Internal – Installation and Troubleshooting (9, 6)  ->  https://community.nividous.com/forum/bot-internal/internal-installation-and-troubleshooting/
+Internal – Process Scheduling (8, 6)  ->  https://community.nividous.com/forum/bot-internal/internal-process-scheduling/
+1 year, 9 months ago  ->  https://community.nividous.com/topic/bot-forum-testing-2/#post-17587
+Harsh Thakkar  ->  https://community.nividous.com/users/harsh/
+Smart Bot (Internal)  ->  https://community.nividous.com/forum/smart-bot-internal/
+Internal – Installation and Troubleshooting (1, 0)  ->  https://community.nividous.com/forum/smart-bot-internal/internal-installation-and-troubleshooting/
+Internal – Entity Extraction (2, 0)  ->  https://community.nividous.com/forum/smart-bot-internal/internal-entity-extraction/
+Internal – Classification (1, 0)  ->  https://community.nividous.com/forum/smart-bot-internal/internal-classification/
+3 years, 8 months ago  ->  https://community.nividous.com/topic/how-to-create-dataset-for-ner/
+Action name missing or invalid  ->  https://community.nividous.com/topic/action-name-missing-or-invalid/
+Index Out of Range  ->  https://community.nividous.com/topic/index-out-of-range/
+How to schedule a process?  ->  https://community.nividous.com/topic/how-to-schedule-a-process/
+Bot is not reachable  ->  https://community.nividous.com/topic/bot-is-not-reachable/
+Which classification is better?  ->  https://community.nividous.com/topic/which-classification-is-better/
+Adding Subprocess  ->  https://community.nividous.com/topic-tag/add-subprocess/
+Bot  ->  https://community.nividous.com/topic-tag/bot/
+Control Center  ->  https://community.nividous.com/topic-tag/control-center/
+Custom Library  ->  https://community.nividous.com/topic-tag/custom-library/
+Database Connection  ->  https://community.nividous.com/topic-tag/database-connection/
+Database Library  ->  https://community.nividous.com/topic-tag/database-library/
+Debug  ->  https://community.nividous.com/topic-tag/debug/
+Desktop automation  ->  https://community.nividous.com/topic-tag/desktop-automation/
+Excel Automation  ->  https://community.nividous.com/topic-tag/excel-automation/
+Excel Library  ->  https://community.nividous.com/topic-tag/excel-library/
+Exception Handling  ->  https://community.nividous.com/topic-tag/exception-handling/
+Export Project  ->  https://community.nividous.com/topic-tag/export-project/
+If Condition  ->  https://community.nividous.com/topic-tag/if-condition/
+Image Recognition  ->  https://community.nividous.com/topic-tag/image-recognition/
+Loop  ->  https://community.nividous.com/topic-tag/loop/
+OCR  ->  https://community.nividous.com/topic-tag/ocr/
+Pdf Automation  ->  https://community.nividous.com/topic-tag/pdf-automation/
+Process Deployment  ->  https://community.nividous.com/topic-tag/process-deployment/
+Process Execution  ->  https://community.nividous.com/topic-tag/process-execution/
+Recorder  ->  https://community.nividous.com/topic-tag/recorder/
+Regex  ->  https://community.nividous.com/topic-tag/regex/
+RPA  ->  https://community.nividous.com/topic-tag/rpa/
+SAP Automation  ->  https://community.nividous.com/topic-tag/sap-automation/
+SAP Library  ->  https://community.nividous.com/topic-tag/sap-library/
+Scheduler  ->  https://community.nividous.com/topic-tag/scheduler/
+SMTP  ->  https://community.nividous.com/topic-tag/smtp/
+Studio  ->  https://community.nividous.com/topic-tag/studio/
+Variables  ->  https://community.nividous.com/topic-tag/variables/
+Vault Library  ->  https://community.nividous.com/topic-tag/vault-library/
+Web Library  ->  https://community.nividous.com/topic-tag/web-library/
+Web Recorder  ->  https://community.nividous.com/topic-tag/web-recorder/
+Xpath  ->  https://community.nividous.com/topic-tag/xpath/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-administration/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-advanced/
+Yes  ->  https://community.nividous.com/course/rpa-essentials/

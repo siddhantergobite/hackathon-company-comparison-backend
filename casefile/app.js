@@ -24,9 +24,37 @@ function showIntelTab(id, btn) {
   if (btn) btn.classList.add('active');
 }
 
+function flattenVal(v, depth) {
+  if (depth == null) depth = 0;
+  if (v == null || v === '') return '';
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s || s.toLowerCase() === '[object object]') return '';
+    return s;
+  }
+  if (depth > 4) return '';
+  if (Array.isArray(v)) {
+    return v.map(x => flattenVal(x, depth + 1)).filter(Boolean).join(', ');
+  }
+  if (typeof v === 'object') {
+    if ('value' in v) return flattenVal(v.value, depth + 1);
+    for (const k of ['text', 'label', 'name', 'summary', 'regions', 'countries', 'description', 'item']) {
+      if (v[k] != null && v[k] !== '') return flattenVal(v[k], depth + 1);
+    }
+    return Object.entries(v)
+      .filter(([k]) => !['source', 'confidence', 'verified', 'favicon', 'provenance'].includes(k))
+      .map(([, val]) => flattenVal(val, depth + 1))
+      .filter(Boolean)
+      .join('; ');
+  }
+  return '';
+}
+
 function val(field) {
-  if (field && typeof field === 'object' && 'value' in field) return field.value || '';
-  return field || '';
+  if (field && typeof field === 'object' && 'value' in field) return flattenVal(field.value);
+  return flattenVal(field);
 }
 
 function scoreNum(v) {
@@ -46,7 +74,7 @@ function scoreNum(v) {
 function isJunkText(s) {
   const t = String(s || '').toLowerCase();
   if (!t) return true;
-  return /what's on your mind|create images|ai mode|add images|add files|forgot password|sign in|cookie|captcha|google offered in|request has been blocked|skip to main content|jump to content|main menu|move to sidebar|chatgpt|chat\.openai|what can i help with|message chatgpt|upgrade to plus/.test(t);
+  return /what's on your mind|create images|ai mode|add images|add files|forgot password|sign in|cookie|captcha|google offered in|request has been blocked|skip to main content|jump to content|main menu|move to sidebar|chatgpt|chat\.openai|what can i help with|message chatgpt|upgrade to plus|authenticity \d|source reliability \d|omitted rather than guessed|not independently verified/.test(t);
 }
 
 function esc(s) {
@@ -60,9 +88,10 @@ function initials(name) {
 }
 
 function hasData(v) {
+  if (v && typeof v === 'object' && !Array.isArray(v)) v = flattenVal(v);
   if (!v) return false;
   const s = String(v).trim().toLowerCase();
-  return s && !s.includes('not publicly') && !s.includes('not available') && s !== 'n/a' && s !== '—';
+  return s && !s.includes('not publicly') && !s.includes('not available') && s !== 'n/a' && s !== '—' && s !== '[object object]';
 }
 
 function ensureUrl(u) {
@@ -125,18 +154,31 @@ function riskRows(risk) {
 function leaderCard(ldr) {
   const name = ldr.name || 'Unknown';
   const role = ldr.role || ldr.title || '';
+  const historical = ldr.status === 'historical' || (/historical|former|co-?founder/i.test(role) && !/ceo|chief executive|president|managing director/i.test(role));
   return (
     `<div class="who">
       <div class="avatar">${esc(initials(name))}</div>
       <div>
         <div class="field-value" style="font-weight:500;">${esc(name)}</div>
         <div style="font-size:12px;color:var(--teal);">${esc(role)}</div>
+        ${historical ? '<span class="cite-badge">Historical — not current operating exec</span>' : ''}
       </div>
     </div>`
   );
 }
 
 function bestPoc(report) {
+  const supplied = report.point_of_contact;
+  if (supplied && (supplied.name || supplied.email || supplied.phone)) {
+    return {
+      name: supplied.name || '',
+      title: supplied.title || '',
+      email: supplied.email || '',
+      phone: supplied.phone || '',
+      company: supplied.company || '',
+      reason: supplied.reason || '',
+    };
+  }
   const co = report.company_profile || {};
   const meta = report._meta || {};
   const company = meta.company_name || val(co.name) || 'Company';
@@ -151,14 +193,14 @@ function bestPoc(report) {
 
   const namedEmail = emails.find(e => {
     if (typeof e !== 'object') return false;
-    return hasData(e.person_name || e.name);
+    return hasData(e.person_name || e.person || e.name);
   }) || emails[0];
 
   if (namedEmail) {
     if (typeof namedEmail === 'string') {
       email = namedEmail;
     } else {
-      name = namedEmail.person_name || namedEmail.name || '';
+      name = namedEmail.person_name || namedEmail.person || namedEmail.name || '';
       title = namedEmail.title || namedEmail.label || namedEmail.role || '';
       email = namedEmail.email || namedEmail.address || '';
     }
@@ -180,7 +222,10 @@ function bestPoc(report) {
 
   if (!name && !email) {
     const leaders = (report.leadership_team || []).filter(l => l && l.name);
-    const exec = leaders.find(l => /ceo|founder|director|head|president|md|managing/i.test(l.role || '')) || leaders[0];
+    const current = leaders.filter(l => l.status !== 'historical');
+    const exec = current.find(l => /ceo|chief executive|managing director|\bmd\b|president/i.test(l.role || ''))
+      || current.find(l => /cfo|coo|cto|chair/i.test(l.role || ''))
+      || current[0];
     if (exec) {
       name = exec.name || '';
       title = exec.role || exec.title || '';
@@ -190,8 +235,16 @@ function bestPoc(report) {
   return { name, title, email, phone, company };
 }
 
+function citeHref(c) {
+  const url = (c && (c.url || c.source_url || c.href)) || '';
+  if (url && /^https?:\/\//i.test(url)) return url;
+  const domain = (c && c.domain) ? String(c.domain).replace(/^www\./, '') : '';
+  if (domain && domain.includes('.')) return 'https://' + domain;
+  return ensureUrl(url);
+}
+
 function renderCitations(meta) {
-  const citations = meta.citations || [];
+  const citations = (meta.citations || []).filter(c => c && (c.url || c.domain));
   const bar = document.getElementById('citations-bar');
   const cards = document.getElementById('citation-cards');
   const stack = document.getElementById('citation-stack');
@@ -206,25 +259,38 @@ function renderCitations(meta) {
 
   if (bar) bar.style.display = 'flex';
   if (cards) cards.style.display = 'block';
-  if (countLabel) countLabel.textContent = `${citations.length} source${citations.length !== 1 ? 's' : ''}`;
+  if (countLabel) {
+    countLabel.textContent = `${citations.length} source${citations.length !== 1 ? 's' : ''}`;
+    countLabel.href = '#citation-cards';
+    countLabel.title = 'Open the full source list';
+  }
 
   if (stack) {
-    stack.innerHTML = citations.slice(0, 4).map((c, i) => {
+    const shown = citations.slice(0, 4);
+    stack.style.width = `${22 + Math.max(0, shown.length - 1) * 14}px`;
+    stack.innerHTML = shown.map((c, i) => {
+      const href = citeHref(c);
       const fav = c.favicon || `https://www.google.com/s2/favicons?domain=${encodeURIComponent(c.domain || '')}&sz=64`;
-      return `<img src="${esc(fav)}" alt="" style="left:${i * 14}px" onerror="this.style.display='none'">`;
+      const label = c.title || c.domain || 'Source';
+      return `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" title="${esc(label)}" style="left:${i * 14}px">
+        <img src="${esc(fav)}" alt="${esc(c.domain || label)}" onerror="this.style.display='none'">
+      </a>`;
     }).join('');
   }
 
   if (list) {
-    list.innerHTML = citations.map((c, i) =>
-      `<div class="citation-card">
+    list.innerHTML = citations.map((c, i) => {
+      const href = citeHref(c);
+      return `<div class="citation-card">
         <span class="cite-badge">${i + 1}</span>
         <div>
-          <a href="${esc(ensureUrl(c.url))}" target="_blank" rel="noopener">${esc(c.title || c.domain || 'Source')}</a>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${esc(c.domain || '')}${c.category ? ' · ' + esc(c.category) : ''}</div>
+          <a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(c.title || c.domain || 'Source')}</a>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+            <a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:inherit;font-weight:400;">${esc(c.domain || href)}</a>${c.category ? ' · ' + esc(c.category) : ''}
+          </div>
         </div>
-      </div>`
-    ).join('');
+      </div>`;
+    }).join('');
   }
 }
 
@@ -305,7 +371,15 @@ function renderIntelPanels(report) {
           <span class="cite-badge conf-${(l.confidence || 'medium').toLowerCase()}">● ${esc(l.confidence || 'Medium')}</span>
           ${l.background ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${esc(l.background)}</div>` : ''}
         </div>`).join('')
-    : '<p class="field-value">No public leadership found on the company website or public sources.</p>';
+    : '<p class="field-value">No public leadership found.</p>';
+
+  const hiring = (report.hiring_signals || []).filter(h => h && h.role);
+  const hiringHtml = hiring.length
+    ? `<p class="field-value" style="color:var(--text-muted);margin-bottom:10px;">Only official employer careers / company ATS / LinkedIn company jobs are shown. Keyword job-board matches are excluded.</p>
+       <ul class="hiring-list">${hiring.map(h =>
+         `<li><span class="role">${esc(h.role)}</span><span class="count">${esc(h.platform || 'Official')}${h.source_url ? `<span class="hiring-source"><a href="${esc(ensureUrl(h.source_url))}" target="_blank" rel="noopener">source</a></span>` : ''}</span></li>`
+       ).join('')}</ul>`
+    : '<p class="field-value">No public hiring found.</p>';
 
   document.getElementById('intel-people').innerHTML = `
     <h4>Workforce Stats</h4>
@@ -313,8 +387,10 @@ function renderIntelPanels(report) {
     ${intelRow('Hiring Trend', emp.hiring_trend)}
     ${intelRow('Remote Policy', emp.remote_policy)}
     ${intelRow('Glassdoor Rating', emp.glassdoor_rating)}
-    <h4 style="margin-top:18px;">Leadership</h4>
+    <h4 style="margin-top:18px;">Current leadership</h4>
     ${leaderHtml}
+    <h4 style="margin-top:18px;">Verified hiring</h4>
+    ${hiringHtml}
     <h4 style="margin-top:18px;">Culture</h4>
     <p class="field-value" style="font-style:italic;">${esc(val(emp.culture_summary) || 'Limited public culture reviews found')}</p>`;
 
@@ -492,13 +568,14 @@ function renderTargetSummary(report) {
   const name = meta.company_name || val(co.name) || 'Company';
   const ind = val(co.industry);
   const hqRaw = val(co.headquarters);
-  const hq = hasData(hqRaw) && !/^not publicly available$/i.test(String(hqRaw).trim()) ? hqRaw : '';
+  const hq = hasData(hqRaw) ? hqRaw : '';
   const desc = val(co.description);
   const overall = scoreNum(sc.overall);
   const completeness = scoreNum(sc.data_completeness);
   const reliability = scoreNum(sc.source_reliability);
-  const heroSummary = (!isJunkText(sc.summary) && sc.summary)
-    || (!isJunkText(desc) && desc)
+  const authenticity = scoreNum(sc.authenticity);
+  const heroSummary = (!isJunkText(desc) && desc)
+    || (!isJunkText(sc.summary) && sc.summary)
     || '';
 
   document.getElementById('target-hero-name').textContent = name + (hq ? ' • ' + hq.split(',')[0] : '');
@@ -525,13 +602,15 @@ function renderTargetSummary(report) {
   ).join('');
 
   const conf = document.getElementById('target-confidence');
-  if (completeness != null || reliability != null || meta.generated_at) {
+  if (completeness != null || reliability != null || authenticity != null || meta.generated_at) {
     conf.style.display = 'flex';
     conf.innerHTML = `<b>DATA CONFIDENCE:</b>
+      ${authenticity != null ? `<span>Authenticity: <strong>${authenticity}/100</strong></span>` : ''}
       ${completeness != null ? `<span>Completeness: <strong>${completeness}/100</strong></span>` : ''}
       ${reliability != null ? `<span>Source Reliability: <strong>${reliability}/100</strong></span>` : ''}
-      ${meta.citation_count || (meta.citations || []).length ? `<span>${meta.citation_count || meta.citations.length} sources verified</span>` : ''}
-      ${meta.generated_at ? `<span>Generated: ${esc(meta.generated_at)}</span>` : ''}`;
+      ${meta.citation_count || (meta.citations || []).length ? `<a class="citation-count-link" href="#citation-cards">${meta.citation_count || meta.citations.length} sources</a>` : ''}
+      ${meta.generated_at ? `<span>Generated: ${esc(meta.generated_at)}</span>` : ''}
+      <span style="font-size:11px;color:var(--text-muted);">Completeness is not accuracy — overall is capped by authenticity and source reliability.</span>`;
   }
 
   renderIntelPanels(report);
@@ -545,23 +624,32 @@ function renderTargetSummary(report) {
       ).join('')
     : '<span class="field-value">No public leadership found</span>';
 
+  const hiringHero = (report.hiring_signals || []).filter(h => h && h.role);
+  const hiringEl = document.getElementById('target-hiring');
+  if (hiringEl) {
+    hiringEl.innerHTML = hiringHero.length
+      ? hiringHero.slice(0, 3).map(h => {
+          const href = h.source_url ? ensureUrl(h.source_url) : '';
+          const role = esc(h.role);
+          const plat = esc(h.platform || 'Official');
+          return href
+            ? `<div style="margin-bottom:8px;"><a href="${esc(href)}" target="_blank" rel="noopener">${role}</a><div style="font-size:11px;color:var(--text-muted);">${plat}</div></div>`
+            : `<div style="margin-bottom:8px;">${role}<div style="font-size:11px;color:var(--text-muted);">${plat}</div></div>`;
+        }).join('')
+      : '<span class="field-value">No public hiring found</span>';
+  }
+
   const poc = bestPoc(report);
   const pocEl = document.getElementById('target-poc');
   if (poc.name || poc.email || poc.phone) {
     pocEl.innerHTML =
-      (poc.name ? leaderCard({ name: poc.name, role: poc.title }) : '') +
+      (poc.name ? leaderCard({ name: poc.name, role: poc.title, status: 'current' }) : '') +
       (poc.email ? `<div style="font-size:12px;margin-top:8px;color:var(--text-muted);">${esc(poc.email)}</div>` : '') +
-      (poc.phone ? `<div style="font-size:12px;margin-top:4px;color:var(--text-muted);">${esc(poc.phone)}</div>` : '');
+      (poc.phone ? `<div style="font-size:12px;margin-top:4px;color:var(--text-muted);">${esc(poc.phone)}</div>` : '') +
+      (poc.reason ? `<div style="font-size:11px;margin-top:6px;color:var(--text-muted);">${esc(poc.reason)}</div>` : '');
   } else {
-    pocEl.innerHTML = '<span class="field-value">No contact found on public sources</span>';
+    pocEl.innerHTML = '<span class="field-value">No current operating contact verified on public sources</span>';
   }
-
-  const hiring = report.hiring_signals || [];
-  document.getElementById('target-hiring').innerHTML = hiring.length
-    ? hiring.map(h =>
-        `<li><span class="role">${esc(h.role)}</span><span class="count">${h.count || 1} open${h.source_url ? `<span class="hiring-source"><a href="${esc(ensureUrl(h.source_url))}" target="_blank" rel="noopener">source</a></span>` : ''}</span></li>`
-      ).join('')
-    : '<li><span class="role">No public hiring found</span></li>';
 
   syncPocCard(poc);
   updatePdfTitle();

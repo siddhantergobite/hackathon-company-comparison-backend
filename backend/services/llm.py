@@ -288,6 +288,8 @@ def chat(
     model: Optional[str] = None,
     json_mode: bool = False,
     timeout: float = 180.0,
+    reasoning_effort: Optional[str] = None,
+    retry_empty: bool = True,
 ) -> str:
     """
     Chat completion — Azure OpenAI first (production default).
@@ -302,31 +304,72 @@ def chat(
         try:
             client = _azure_client()
 
-            def _azure_call(use_json: bool) -> str:
+            def _azure_call(use_json: bool, token_budget: int) -> str:
                 kwargs: dict[str, Any] = {
                     "model": use_model,
                     "messages": messages,
                     "timeout": timeout,
                 }
+                # gpt-5 / o-series burn completion budget on reasoning first.
+                # Too-low max_completion_tokens → empty content on large research prompts.
                 if _is_reasoning_model(use_model):
-                    kwargs["max_completion_tokens"] = min(max(max_tokens + 800, 512), 6000)
+                    floor = 2048 if (reasoning_effort or "").lower() in ("low", "minimal", "none") else 4096
+                    kwargs["max_completion_tokens"] = min(max(token_budget, floor), 16000)
+                    effort = (reasoning_effort or "low").lower()
+                    extra = {"reasoning_effort": effort}
+                    try:
+                        kwargs["reasoning_effort"] = effort
+                    except Exception:
+                        pass
+                    kwargs["extra_body"] = extra
                 else:
-                    kwargs["max_tokens"] = max_tokens
+                    kwargs["max_tokens"] = token_budget
                     kwargs["temperature"] = temperature
                 if use_json:
                     kwargs["response_format"] = {"type": "json_object"}
-                resp = client.chat.completions.create(**kwargs)
-                return (resp.choices[0].message.content or "").strip()
+                try:
+                    resp = client.chat.completions.create(**kwargs)
+                except Exception as e:
+                    err = str(e).lower()
+                    if "reasoning" in err or "extra_body" in err or isinstance(e, TypeError):
+                        kwargs.pop("reasoning_effort", None)
+                        kwargs.pop("extra_body", None)
+                        resp = client.chat.completions.create(**kwargs)
+                    else:
+                        raise
+                msg = resp.choices[0].message
+                text = (msg.content or "").strip()
+                if not text:
+                    # Some Azure reasoning payloads put usable text in secondary fields
+                    alt = getattr(msg, "reasoning_content", None) or getattr(msg, "refusal", None) or ""
+                    if isinstance(alt, str) and alt.strip().startswith("{"):
+                        text = alt.strip()
+                finish = getattr(resp.choices[0], "finish_reason", None)
+                if not text:
+                    print(f"[Azure OpenAI] empty content finish={finish} budget={kwargs.get('max_completion_tokens') or kwargs.get('max_tokens')}")
+                return text
 
             text = ""
+            # Fast path: do not inflate reasoning budget (that makes gpt-5-mini think for minutes)
+            extra_think = 0 if (reasoning_effort or "").lower() in ("low", "minimal", "none") else (
+                6000 if _is_reasoning_model(use_model) else 0
+            )
+            first_budget = max_tokens + extra_think
             try:
-                text = _azure_call(json_mode)
+                text = _azure_call(json_mode, first_budget)
             except Exception as e1:
                 if json_mode:
                     print(f"[Azure OpenAI] json_mode failed ({e1}); retrying plain")
-                    text = _azure_call(False)
+                    text = _azure_call(False, first_budget)
                 else:
                     raise
+            # Empty → retry with larger budget only when caller asked for it
+            if not text and retry_empty and _is_reasoning_model(use_model):
+                print("[Azure OpenAI] empty — retrying with larger completion budget")
+                try:
+                    text = _azure_call(False, max(first_budget * 2, 12000))
+                except Exception as e2:
+                    print(f"[Azure OpenAI] retry failed: {e2}")
             if text:
                 print(f"[Azure OpenAI] OK model={use_model} chars={len(text)}")
                 return text
@@ -335,9 +378,11 @@ def chat(
             errors.append(f"Azure: {e}")
             print(f"[Azure OpenAI] failed: {e}")
 
-    # 2) Groq only when explicitly enabled (avoid daily rate-limit outages)
-    if RESEARCH_USE_GROQ and GROQ_KEY:
+    # 2) Groq — explicit enable OR emergency fallback when Azure returned empty
+    if GROQ_KEY and (RESEARCH_USE_GROQ or "Azure returned empty content" in errors):
         try:
+            if not RESEARCH_USE_GROQ:
+                print("[LLM] Azure empty — emergency Groq fallback")
             return chat_groq(
                 messages,
                 temperature=temperature,

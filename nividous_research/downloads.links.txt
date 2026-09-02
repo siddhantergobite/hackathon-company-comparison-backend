@@ -1,0 +1,29 @@
+  ->  https://community.nividous.com/
+Knowledge Base  ->  https://community.nividous.com/knowledge-base-2/
+Forum  ->  https://community.nividous.com/forums/
+Global Forum  ->  https://community.nividous.com/forums/
+Nividous Forum  ->  https://community.nividous.com/nividous-forum/
+Learning  ->  https://community.nividous.com/learning/
+Download Resources  ->  https://community.nividous.com/download-resources/
+Amol Agnihotri  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+My Courses  ->  https://community.nividous.com/profile/amol-aergobite-com/my-courses/
+My Orders  ->  https://community.nividous.com/profile/amol-aergobite-com/orders/
+My Certificates  ->  https://community.nividous.com/profile/amol-aergobite-com/certificates/
+Edit Profile  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+Logout  ->  https://community.nividous.com/back-admin/?action=logout&#38;redirect_to=https%3A%2F%2Fcommunity.nividous.com&#38;_wpnonce=9c46897254
+Home  ->  https://community.nividous.com/
+Nividous Studio 7.5.1 Patch  ->  https://community.nividous.com/downloads/NividousStudio-7.5.1-Patch.zip
+Studio 7.5.1 Release Notes  ->  https://community.nividous.com/downloads/ReleaseNotes_NividousStudio7.5.1.pdf
+Nividous Studio Setup 7.5.0.138  ->  https://community.nividous.com/downloads/NividousStudio-7.5.0.138.zip
+Studio 7.5.0 Release Notes  ->  https://community.nividous.com/downloads/ReleaseNotes_NividousStudio7.5.0.pdf?v1
+Nividous Studio 7.0.1 Patch  ->  https://community.nividous.com/downloads/NividousStudio-7.0.1-Patch.zip
+Studio 7.0.1 Release Notes  ->  https://community.nividous.com/downloads/ReleaseNotes_NividousStudio7.0.1.pdf
+Nividous Studio Setup 7.0.0.7739  ->  https://community.nividous.com/downloads/NividousStudio-7.0.0.7739.zip
+Studio 7.0.0 Release Notes  ->  https://community.nividous.com/downloads/ReleaseNotes_NividousStudio7.0.0.pdf
+Nividous Studio Setup 6.1.0.5985  ->  https://community.nividous.com/downloads/NividousStudio-6.1.0.5985.zip
+Studio 6.1.0 Release Notes  ->  https://community.nividous.com/downloads/ReleaseNotes_NividousStudio6.1.0.pdf
+Nividous Studio Setup 6.0.0.4524  ->  https://community.nividous.com/downloads/NividousStudio-6.0.0.4524.zip
+Studio 6.0.0 Release Notes  ->  https://community.nividous.com/downloads/ReleaseNotes_NividousStudio6.0.0.pdf
+Yes  ->  https://community.nividous.com/course/nividous-rpa-administration/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-advanced/
+Yes  ->  https://community.nividous.com/course/rpa-essentials/

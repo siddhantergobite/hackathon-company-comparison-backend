@@ -1,0 +1,40 @@
+  ->  https://community.nividous.com/
+Knowledge Base  ->  https://community.nividous.com/knowledge-base-2/
+Forum  ->  https://community.nividous.com/forums/
+Global Forum  ->  https://community.nividous.com/forums/
+Nividous Forum  ->  https://community.nividous.com/nividous-forum/
+Learning  ->  https://community.nividous.com/learning/
+Download Resources  ->  https://community.nividous.com/download-resources/
+Amol Agnihotri  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+My Courses  ->  https://community.nividous.com/profile/amol-aergobite-com/my-courses/
+My Orders  ->  https://community.nividous.com/profile/amol-aergobite-com/orders/
+My Certificates  ->  https://community.nividous.com/profile/amol-aergobite-com/certificates/
+Edit Profile  ->  https://community.nividous.com/profile/amol-aergobite-com/settings/
+Logout  ->  https://community.nividous.com/back-admin/?action=logout&#38;redirect_to=https%3A%2F%2Fcommunity.nividous.com&#38;_wpnonce=9c46897254
+Continue  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-course-overview/
+1.1Course Overview  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-course-overview/
+2.1Introduction to LPA  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/introduction-to-bpm-and-lpa/
+2.2BPMN 2.0 Notations  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/bpmn-2-0-notattions/
+3.1Installing Nividous IA Studio  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-installation-and-setup-configuration/
+3.2Installing Nividous IA Control Center  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/installing-nividous-ia-control-center/
+3.3Installing Nividous IA Bot  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-installing-nividous-ia-bot/
+4.1User Management  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-user-management/
+5.1Business Objects  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-business-object/
+5.2Your First LPA Process  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/first-lpa-process/
+5.3Tasks  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-tasks/
+5.4More on LPA Process  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/deep-dive-into-lpa-process/
+5.5Quiz-110 Minutes10 Questions  ->  https://community.nividous.com/course/lpa-essentials-7-5/quizzes/lps-quiz/
+5.6Exercise-1.12 Days  ->  https://community.nividous.com/course/lpa-essentials-7-5/assignments/lpa-exercise-1/
+5.7Gateways  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/writing-own-custom-logic/
+5.8Events  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-event-handling/
+6.1Subprocess and Call Activity  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-reusability/
+7.1Form Customization  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/form-customization/
+8.1RPA Task  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/lpa-rpa-task/
+9.1Quiz -220 Minutes20 Questions  ->  https://community.nividous.com/course/lpa-essentials-7-5/quizzes/lpa-75-quiz-2/
+10.1Exercise -1.22 Days  ->  https://community.nividous.com/course/lpa-essentials-7-5/assignments/lpa-75-exercise-1-2/
+11.1Hands-On Exam3 Days  ->  https://community.nividous.com/course/lpa-essentials-7-5/assignments/lpa-adv-75-hands-on/
+12.1We Value Your Feedback  ->  https://community.nividous.com/course/lpa-essentials-7-5/lessons/survey-6/
+Jyoti Hunka  ->  https://community.nividous.com/lpa-essentials-7-5/jyoti-hunkanividous-com/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-administration/
+Yes  ->  https://community.nividous.com/course/nividous-rpa-advanced/
+Yes  ->  https://community.nividous.com/course/rpa-essentials/

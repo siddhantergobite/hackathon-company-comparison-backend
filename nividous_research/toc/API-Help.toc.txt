@@ -1,0 +1,73 @@
+- About Control Center  <About RPA Control Center/Introduction to Control Center.htm>
+- About Smart Bots  <About_Smart_Bots/About_SmartBots.htm>
+- Product Support  <Support.htm>
+- Disclaimer  <Disclaimer.htm>
+- APIs for Control Center 7.5  <APIs_for_Control_Center_V2/APIs_for_Control_Center_V2.htm>
+    - Get Template JSON  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Getting_Template_JSON.htm>
+    - Upload Template JSON  <APIs_for_Control_Center_V2/Upload_Template_JSON.htm>
+    - Get All Template Name List  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Getting_All_Template_Name_List.htm>
+    - Get Text Classifier Model List  <APIs_for_Control_Center_V2/Get_Text_Classifier_Model_List.htm>
+    - Get Image Classifier Model List  <APIs_for_Control_Center_V2/Get_Image_Classifier_Model_List.htm>
+    - Get Search Based Classifier Model List  <APIs_for_Control_Center_V2/Get_Search_Based_Classifier_Model_List.htm>
+    - Get NLP Extraction Model List  <APIs_for_Control_Center_V2/Get_Named_Entity_Recognition_Model_List.htm>
+    - Get Search Based Extraction Model List  <APIs_for_Control_Center_V2/Get_Search_Based_Extraction_Model_List.htm>
+    - Get Predictive Analysis Model List  <APIs_for_Control_Center_V2/Get_Predictive_Analysis_Model_List.htm>
+    - RPA Processes  <APIs_for_Control_Center_V2/RPA_Processes/RPA_Processes.htm>
+        - Get All Processes  <APIs_for_Control_Center_V2/RPA_Processes/Get_All_Processes.htm>
+        - Get Process Details  <APIs_for_Control_Center_V2/RPA_Processes/Get_Process_Details.htm>
+        - Create Process  <APIs_for_Control_Center_V2/RPA_Processes/Create_Process.htm>
+        - Upload Draft Process  <APIs_for_Control_Center_V2/RPA_Processes/Upload_Draft_Process.htm>
+        - Get Active Draft Process  <APIs_for_Control_Center_V2/RPA_Processes/Get_Active_Draft_Process.htm>
+        - Get Active Draft Processes  <APIs_for_Control_Center_V2/RPA_Processes/Get_Active_Draft_Processes.htm>
+        - Get Draft Process Detail  <APIs_for_Control_Center_V2/RPA_Processes/Get_Draft_Process_Detail.htm>
+        - Download Draft Process  <APIs_for_Control_Center_V2/RPA_Processes/Download_Draft_Process.htm>
+- APIs for Smart Bots 7.5  <APIs_Smart_Bot_V2/APIs_for_Smart_Bot_V2.htm>
+    - Token Generation  <APIs_Smart_Bot_V2/Token_Generation/Token_Generation.htm>
+        - Generating Access Token for Training Server  <APIs_Smart_Bot_V2/Token_Generation/Generating_Access_Token_for_Training_Server.htm>
+        - Generating Access Token for Application Server  <APIs_Smart_Bot_V2/Token_Generation/Generating_Access_Token_for_Application_Server.htm>
+    - Classification  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Classification_APIs_V2/Classification_APIs_V2.htm>
+        - Text Classification  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Classification_APIs_V2/NLP_Text_Classifier_V2/Text_Classification_Inferencing_V2.htm>
+        - Image Classification  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Classification_APIs_V2/Image_Classifier_APIs_V2/Image_Classification_Inferencing_V2.htm>
+        - Search-Based Classification  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Classification_APIs_V2/Search-Based_Classifier_APIs_V2/Search_Based_Classification_Inferencing_V2.htm>
+        - ID Card Classification  <APIs_Smart_Bot_V2/APIs_for_CV_V2/ID_Card_Classification.htm>
+    - Data Extraction APIs  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/NLP_Extraction_V2/NLP_Extraction_V2.htm>
+        - NLP Extraction  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/NLP_Extraction_V2/Named_Entity_Recognition_(NER)_Inferencing_V2.htm>
+        - Search-Based Extraction  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Search_Based_Recognition_APIs_V2/Search-Based_Recognition_Inferencing_V2.htm>
+        - Digital Extraction  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Digital_Extraction_APIs_V2/Digital_Extraction_Inferencing_API_V2.htm>
+        - CV Template Extraction  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Template_Extraction_Service_V2.htm>
+    - Predictive Analysis  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Predictive_Analysis_APIs_V2/Predictive_Analysis_Inferencing_V2.htm>
+    - Text Analysis  <APIs_Smart_Bot_V2/Text_Analysis.htm>
+        - GET-ROI  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Creating_Template_V2.htm>
+        - Get Sorted ROI  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Get_Sorted_ROI.htm>
+        - Text Clustering  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Text_Clustering.htm>
+        - Text Summarization  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Text_Summarization.htm>
+    - Pre-Processing  <APIs_Smart_Bot_V2/Pre_and_Post_Processing.htm>
+        - ID Edge-Detection  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Edge-Detection_V2.htm>
+        - Orientation Detection  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Orientation_Detection_V2.htm>
+    - Adapter  <APIs_Smart_Bot_V2/Adapter.htm>
+    - Utilities  <APIs_Smart_Bot_V2/Utilities.htm>
+        - Assisted OCR  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Assisting_OCR_V2.htm>
+        - Delete Transaction (TX) Data  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Deleting_Transaction_(TX)_Data_V2.htm>
+        - Purge Transaction (TX) Data  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Purge_TX_Data.htm>
+        - Generate Pre-signed URL  <APIs_Smart_Bot_V2/APIs_for_CV_V2/Generate_Pre-signed_URL.htm>
+    - Managing Model  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Other_Model_APIs.htm>
+        - Load Model   <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Load_Model_API.htm>
+        - Unload Model   <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Unload_Model_API.htm>
+        - Model Metadata  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Model_Metadata.htm>
+        - Import Model  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Import_Model.htm>
+        - Export Model  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Export_Model.htm>
+        - Delete Model  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Delete_Model.htm>
+        - Deploy Model  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Deploy_Model.htm>
+        - Undeploy Model  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Undeploy_Model.htm>
+        - Get Deployed Models List  <APIs_Smart_Bot_V2/APIs_For_NLP_V2/Other_Model_APIs/Get_Deployed_Models_list.htm>
+    - Generative AI  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_API.htm>
+        - Generative AI_Grammar Correction  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI.htm>
+        - Generative AI_Text Comparison  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Text_Comparison.htm>
+        - Generative AI_Classification  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Classification.htm>
+        - Generative AI_Text Summarization  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Text_Summarization.htm>
+        - Generative AI_Document Query  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Document_Query.htm>
+        - Generative AI_Translation  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Translation.htm>
+        - Generative AI_Sentiment Analysis  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Sentiment_Analysis.htm>
+        - Generative AI_Data Extraction  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Data_Extraction.htm>
+        - Generative AI_Auto Annotation  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Auto_Annotation.htm>
+        - Generative AI_Email Generation  <APIs_Smart_Bot_V2/Generative_AI/Generative_AI_Email_Generation.htm>
