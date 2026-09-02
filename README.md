@@ -1,3 +1,5 @@
+
+
 # Company Intelligence Casefile + AEO/GEO
 
 Backend + Casefile UI for brochure intake, target company research, compare & pitch, outreach, PDF export, and AEO/GEO audits.
@@ -39,6 +41,8 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
 Or double-click `start_backend.bat`
 
 Open: **http://127.0.0.1:8765/casefile/**
+
+That is the only product UI (Exhibits A–F, including AEO/GEO). Do not use `localhost:3000` — that was a leftover tab from an older/other server and will look like AEO/GEO is missing.
 
 ---
 

@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import RedirectResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.services import (
@@ -36,6 +36,12 @@ app.add_middleware(
 
 
 # ── Health / LLM diagnostics ─────────────────────────────────────────────────
+
+@app.get("/")
+def root():
+    """Open the Casefile UI (includes Exhibit F — AEO / GEO)."""
+    return RedirectResponse(url="/casefile/", status_code=307)
+
 
 @app.get("/health")
 def health():

@@ -717,10 +717,6 @@
       <span class="exhibit-label">Exhibit B</span>
       <span class="exhibit-title">Target Company</span>
     </button>
-    <button class="tab-btn" data-view="v6" onclick="showView('v6', this)" title="Answer Engine Optimization / Generative Engine Optimization audit">
-      <span class="exhibit-label">Exhibit F</span>
-      <span class="exhibit-title">AEO / GEO</span>
-    </button>
     <button class="tab-btn" data-view="v3" onclick="showView('v3', this)">
       <span class="exhibit-label">Exhibit C</span>
       <span class="exhibit-title">Compare &amp; Pitch</span>
@@ -732,6 +728,10 @@
     <button class="tab-btn" data-view="v5" onclick="showView('v5', this)">
       <span class="exhibit-label">Exhibit E</span>
       <span class="exhibit-title">Download PDF</span>
+    </button>
+    <button class="tab-btn" data-view="v6" onclick="showView('v6', this)" title="Answer Engine Optimization / Generative Engine Optimization audit">
+      <span class="exhibit-label">Exhibit F</span>
+      <span class="exhibit-title">AEO / GEO</span>
     </button>
   </nav>
 </header>
@@ -746,7 +746,7 @@
       <div>
         <div class="exhibit-tag">Exhibit A</div>
         <h1>Brochure intake &amp; extraction</h1>
-        <p>Upload a brochure, or search a company name to pull one automatically. The model reads it in full and stores every field for reuse.</p>
+        <p>Upload a brochure, or search a company name to pull one automatically. The model reads it in full and stores every field for reuse. AEO / GEO visibility audit is <strong>Exhibit F</strong> in the top nav.</p>
       </div>
     </div>
 
@@ -813,7 +813,7 @@
       <div>
         <div class="exhibit-tag">Exhibit B</div>
         <h1>Target company profile</h1>
-        <p>Search any company to pull a public profile — leadership, point of contact, and current hiring activity — with an AI read on what they're likely building.</p>
+        <p>Search any company to pull a public profile — leadership, point of contact, and current hiring activity — with an AI read on what they're likely building. For answer-engine / generative-engine visibility, open <a href="#" onclick="showView('v6', document.querySelector('[data-view=v6]')); return false;">Exhibit F — AEO / GEO</a>.</p>
       </div>
     </div>
 

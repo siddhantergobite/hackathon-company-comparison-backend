@@ -148,7 +148,11 @@ def classify_source(url: str, company_domain: str = "") -> str:
             return "Job article (not a live opening)"
         if path in ("", "/"):
             return "Job board homepage"
-        return "Job board (unverified employer)"
+        return "Naukri"
+    if "indeed.com" in h and "/cmp/" in u:
+        return "Indeed"
+    if "glassdoor." in h and any(x in u for x in ("/job", "working-at", "/overview")):
+        return "Glassdoor"
     if any(x in u for x in _LOW_TRUST):
         return "Third-party directory"
     return "Public Web"
@@ -157,9 +161,12 @@ def classify_source(url: str, company_domain: str = "") -> str:
 def _same_brand_host(a: str, b: str) -> bool:
     def stem(h: str) -> str:
         h = (h or "").lower().replace("www.", "")
-        return (h.split(".")[0] if h else "")
+        segs = [s for s in h.split(".") if s]
+        if segs and segs[0] in ("jobs", "careers", "apply", "talent", "recruit"):
+            segs = segs[1:]
+        return segs[0] if segs else ""
     sa, sb = stem(a), stem(b)
-    return bool(sa and sb and sa == sb and len(sa) >= 4)
+    return bool(sa and sb and sa == sb and len(sa) >= 3)
 
 
 def source_trust_score(category: str) -> int:
@@ -172,6 +179,9 @@ def source_trust_score(category: str) -> int:
         "Applicant Tracking (jobs)": 80,
         "LinkedIn Company Jobs": 70,
         "LinkedIn Company Profile": 62,
+        "Naukri": 68,
+        "Indeed": 66,
+        "Glassdoor": 58,
         "News": 68,
         "Funding / Company": 60,
         "Org Chart / Leadership": 64,
@@ -409,9 +419,8 @@ def select_point_of_contact(report: dict) -> dict:
 # ── hiring authenticity ──────────────────────────────────────────────────────
 
 _SERP_TITLE = re.compile(
-    r"(?i)(jobs? in |open roles|job opportunities|current job openings|"
-    r"careers jobs|link to naukri|naukri\.com|\d+\s*\+?\s*(jobs?|openings|vacancies)|"
-    r"hiring now|apply now|walk[- ]in)"
+    r"(?i)(link to naukri|job opportunities at \d|"
+    r"^\d+\s*\+?\s*(jobs?|openings|vacancies)\b|walk[- ]in interview)"
 )
 _PRODUCT_KEYWORD_JOB = re.compile(
     r"(?i)\b(\d{2,4}\s+)?[A-Za-z0-9][A-Za-z0-9 \-]{0,40}\s+jobs?\s+in\s+"
@@ -466,21 +475,56 @@ def is_official_careers_url(url: str, domain: str, company_name: str) -> tuple[b
             return True, "ats"
         return False, "ats_other_employer"
 
-    # LinkedIn company jobs only
+    tokens = _company_tokens(company_name)
+    stem = (cd or "").split(".")[0]
+    if stem and len(stem) >= 3 and stem not in tokens:
+        tokens = list(tokens) + [stem]
+
+    def _brand_in(text: str) -> bool:
+        blob = (text or "").lower().replace("-", "").replace("_", "")
+        return any(len(t) >= 3 and t.replace("-", "") in blob for t in tokens)
+
+    # LinkedIn company jobs (and the company page we can open /jobs on)
     if "linkedin.com" in h:
         if "ad.linkedin.com" in h:
             return False, "linkedin_ads"
-        if "/company/" in u and "/jobs" in u:
-            return True, "linkedin_company_jobs"
-        # Keyword job search URLs
-        if "/jobs/" in u:
+        if "/company/" in u:
+            slug = ""
+            m = re.search(r"/company/([^/?#]+)", u)
+            if m:
+                slug = m.group(1)
+            if _brand_in(slug or u):
+                return True, "linkedin_company_jobs"
+            return False, "linkedin_other_company"
+        if "/jobs/" in u and "keywords=" in u and "f_c=" not in u:
             return False, "linkedin_keyword_search"
+        if "/jobs/" in u and _brand_in(u):
+            return True, "linkedin_company_jobs"
         return False, "linkedin_not_jobs"
 
     if "naukri.com" in h:
-        return False, "naukri_unverified"
-    if any(x in h for x in ("indeed.com", "glassdoor.", "monster.com", "foundit.in")):
-        return False, "aggregator_unverified"
+        if any(x in u for x in ("/code360/", "/library/")):
+            return False, "naukri_noise"
+        if path in ("", "/"):
+            return False, "naukri_home"
+        if _brand_in(path):
+            return True, "naukri"
+        return False, "naukri_other_employer"
+
+    if "indeed.com" in h:
+        if "/cmp/" in u and _brand_in(u):
+            return True, "indeed"
+        return False, "indeed_keyword"
+
+    if "glassdoor." in h:
+        if _brand_in(u) and any(x in u for x in ("/job", "/jobs", "working-at", "/overview", "-e")):
+            return True, "glassdoor"
+        return False, "glassdoor_unrelated"
+
+    if any(x in h for x in ("foundit.in", "monster.com", "monsterindia.com")):
+        if _brand_in(u):
+            return True, "job_board"
+        return False, "job_board_other"
 
     if any(x in path for x in ("/careers", "/jobs")) and tokens_in_url(u, company_name):
         return True, "third_party_careers"
@@ -521,7 +565,8 @@ def filter_hiring_signals(signals: list, company_name: str, domain: str) -> list
         blob = f"{role} {title} {snippet}"
         if not ok:
             continue
-        if kind in ("linkedin_company_jobs", "ats", "third_party_careers"):
+        if kind in ("linkedin_company_jobs", "ats", "third_party_careers",
+                    "naukri", "indeed", "glassdoor", "job_board"):
             if not employer_mentioned(blob + " " + url, company_name, domain):
                 continue
         key = (role.lower()[:60], url.split("?")[0])
@@ -546,8 +591,12 @@ def filter_hiring_signals(signals: list, company_name: str, domain: str) -> list
         rec["platform"] = {
             "official_careers": "Official Careers",
             "ats": "Company ATS",
-            "linkedin_company_jobs": "LinkedIn Company",
+            "linkedin_company_jobs": "LinkedIn",
             "third_party_careers": "Careers microsite",
+            "naukri": "Naukri",
+            "indeed": "Indeed",
+            "glassdoor": "Glassdoor",
+            "job_board": "Job board",
         }.get(kind, h.get("platform") or "Hiring")
         kept.append(rec)
     return kept[:8]
@@ -557,7 +606,7 @@ def hiring_conclusion(company_name: str, hiring: list) -> dict:
     if not hiring:
         return {
             "ai_conclusion": (
-                f"No official careers page or verified openings found for {company_name}."
+                f"No public hiring pages found yet for {company_name}."
             ),
             "signals_used": [],
         }
@@ -566,8 +615,8 @@ def hiring_conclusion(company_name: str, hiring: list) -> dict:
     src = ", ".join(p for p in platforms if p)
     return {
         "ai_conclusion": (
-            f"{company_name} has verified public hiring on {src or 'official channels'} "
-            f"related to: {', '.join(roles)}."
+            f"{company_name} is hiring in public — see {src or 'official channels'} "
+            f"({', '.join(roles)})."
         ),
         "signals_used": roles,
     }

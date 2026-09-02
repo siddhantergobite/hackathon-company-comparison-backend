@@ -375,7 +375,7 @@ function renderIntelPanels(report) {
 
   const hiring = (report.hiring_signals || []).filter(h => h && h.role);
   const hiringHtml = hiring.length
-    ? `<p class="field-value" style="color:var(--text-muted);margin-bottom:10px;">Only official employer careers / company ATS / LinkedIn company jobs are shown. Keyword job-board matches are excluded.</p>
+    ? `<p class="field-value" style="color:var(--text-muted);margin-bottom:10px;">Official careers, LinkedIn, Naukri, Indeed, and company ATS pages. Click source to open.</p>
        <ul class="hiring-list">${hiring.map(h =>
          `<li><span class="role">${esc(h.role)}</span><span class="count">${esc(h.platform || 'Official')}${h.source_url ? `<span class="hiring-source"><a href="${esc(ensureUrl(h.source_url))}" target="_blank" rel="noopener">source</a></span>` : ''}</span></li>`
        ).join('')}</ul>`

@@ -3077,7 +3077,7 @@ Rules:
 
     if not _has_current_officer(extracted.get("leaders") or []):
         retry_prompt = f"""Name the CURRENT public officers of {company_name} (official site {domain}).
-This is a real operating company. Return the sitting MD or CEO, and the Chairman if there is one.
+This is a real operating company. Return the sitting MD or CEO, AND the Chairman if the company has a board.
 
 Return ONLY JSON:
 {{"leaders":[{{"name":"Full Name","role":"Managing Director|CEO|Chairman|President","status":"current","confidence":"High"}}],"careers_url":"https://... or empty"}}
@@ -3099,6 +3099,29 @@ Return ONLY JSON:
                     extracted["careers_url"] = retry["careers_url"]
         except Exception as e:
             print(f"[Research] Compact leadership retry failed: {e}")
+    elif not any(re.search(r"(?i)chair", str((row or {}).get("role") or "")) for row in (extracted.get("leaders") or []) if isinstance(row, dict)):
+        chair_prompt = f"""Who is the current Chairman or Chairperson of {company_name} ({domain})?
+If the company has a board, name the sitting Chair. Also name Vice Chair if publicly known.
+
+Return ONLY JSON:
+{{"leaders":[{{"name":"Full Name","role":"Chairman|Chairperson|Vice Chairperson","status":"current","confidence":"High"}}]}}
+"""
+        try:
+            raw_c = llm_client.chat(
+                [
+                    {"role": "system", "content": "Return valid JSON only. Sitting board chair of this exact company."},
+                    {"role": "user", "content": chair_prompt},
+                ],
+                temperature=0.0, max_tokens=400, json_mode=True, timeout=40.0,
+                reasoning_effort="low",
+            )
+            extra = _parse_llm_json(raw_c)
+            extra_rows = [r for r in (extra.get("leaders") or []) if isinstance(r, dict) and r.get("name")]
+            if extra_rows:
+                print(f"[Research] Added {len(extra_rows)} chair/vice-chair from supplement")
+                extracted["leaders"] = list(extracted.get("leaders") or []) + extra_rows
+        except Exception as e:
+            print(f"[Research] Chair supplement failed: {e}")
 
     verify_prompt = f"""You are the LLM-as-judge. Independently keep or drop each claim about
 {company_name} (website {domain}).
@@ -5175,26 +5198,120 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
     return report
 
 
-def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = "") -> list:
+def _job_board_slugs(company_name: str, domain: str) -> list[str]:
+    stem = (domain or "").split(".")[0].lower()
+    raw = re.sub(r"[^a-z0-9]+", "-", (company_name or "").lower()).strip("-")
+    raw = re.sub(
+        r"-(inc|ltd|llc|limited|corp|corporation|pvt|private|company|co)$", "", raw
+    ).strip("-")
+    compact = raw.replace("-", "")
+    out = []
+    for s in (stem, raw, compact):
+        if s and len(s) >= 2 and s not in out:
+            out.append(s)
+    return out
+
+
+def _canonical_hiring_urls(company_name: str, domain: str, scraped: dict | None = None) -> list[dict]:
+    """Clickable employer pages on official careers, LinkedIn, Naukri, Indeed."""
+    slugs = _job_board_slugs(company_name, domain)
+    primary = slugs[0] if slugs else "company"
+    brand = re.sub(r"[^A-Za-z0-9]+", "-", (company_name or primary).strip()).strip("-") or primary
+    brand = re.split(r"-", brand, maxsplit=1)[0]
+    careers = ((scraped or {}).get("_page_urls") or {}).get("careers_text") or ""
+    rows = []
+    if careers:
+        rows.append((f"Careers at {company_name}", careers, "Official Careers"))
+    rows.append((f"Careers at {company_name}", f"https://{domain}/careers", "Official Careers"))
+    rows.append((f"Jobs at {company_name}", f"https://jobs.{domain}", "Official Careers"))
+    for slug in slugs[:2]:
+        rows.append((f"{company_name} on LinkedIn", f"https://www.linkedin.com/company/{slug}/jobs/", "LinkedIn"))
+        rows.append((f"{company_name} on Naukri", f"https://www.naukri.com/{slug}-jobs", "Naukri"))
+    rows.append((f"{company_name} on Indeed", f"https://www.indeed.com/cmp/{brand}/jobs", "Indeed"))
+    out, seen = [], set()
+    for role, url, platform in rows:
+        key = url.lower().rstrip("/")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "role": role,
+            "count": 1,
+            "platform": platform,
+            "source_url": url,
+            "source_title": f"{platform} — {company_name}",
+            "snippet": f"Public hiring page for {company_name}",
+        })
+    return out
+
+
+def _llm_hiring_fill(company_name: str, domain: str) -> list:
+    """Public job-board URLs + role families, then filtered. Never cited as ChatGPT."""
+    prompt = f"""List CURRENT public hiring pages for {company_name} (website {domain}).
+Include official careers, LinkedIn company jobs, Naukri, Indeed, Glassdoor when they exist.
+
+Return ONLY JSON:
+{{
+  "roles": [
+    {{"role":"Job title or 'Careers at {company_name}'","source_url":"https://...","platform":"Official Careers|LinkedIn|Naukri|Indeed|Glassdoor"}}
+  ]
+}}
+Rules:
+- URLs must be this employer's own jobs page, not a keyword search for a product.
+- Prefer LinkedIn /company/.../jobs, Naukri brand-jobs, Indeed /cmp/, jobs.{domain}, /careers.
+- Never mention ChatGPT, OpenAI, or any AI model.
+"""
+    try:
+        raw = llm_client.chat(
+            [
+                {"role": "system", "content": "Return valid JSON only. Public hiring pages of this employer."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1, max_tokens=700, json_mode=True, timeout=50.0,
+            reasoning_effort="low",
+        )
+        data = _parse_llm_json(raw)
+    except Exception as e:
+        print(f"[Research] Hiring LLM fill failed: {e}")
+        return []
+    rows = []
+    for row in data.get("roles") or []:
+        if not isinstance(row, dict):
+            continue
+        href = str(row.get("source_url") or "").strip()
+        role = re.sub(r"\s+", " ", str(row.get("role") or "")).strip()
+        if not href.startswith("http") or not role:
+            continue
+        rows.append({
+            "role": role[:80],
+            "count": 1,
+            "platform": row.get("platform") or "Hiring",
+            "source_url": href,
+            "source_title": role,
+            "snippet": f"Public hiring for {company_name}",
+        })
+    return rows[:8]
+
+
+def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = "",
+                          scraped: dict | None = None) -> list:
     """
-    Discover official employer openings only.
-    Keyword job-board hits (product + 'jobs in City') are discarded.
+    Official careers + LinkedIn + Naukri + Indeed + ATS.
+    Keyword product searches are dropped; an LLM-as-judge checks leftover rows.
     """
     signals = []
     seen_urls = set()
 
     def _add(role: str, url: str, platform: str, title: str = "", snippet: str = ""):
         role = re.sub(r"\s+", " ", role or "").strip(" -|,")
-        if not role or len(role) < 4 or len(role) > 80:
+        if not role or len(role) < 4 or len(role) > 90:
             return
-        if auth.looks_like_serp_title(role, title):
+        if not url or not str(url).startswith("http"):
             return
-        if url in seen_urls:
+        key = url.split("?")[0].rstrip("/").lower()
+        if key in seen_urls:
             return
-        ok, _kind = auth.is_official_careers_url(url, domain, company_name)
-        if not ok:
-            return
-        seen_urls.add(url)
+        seen_urls.add(key)
         signals.append({
             "role": role.title() if role.islower() else role,
             "count": 1,
@@ -5204,50 +5321,91 @@ def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = ""
             "snippet": (snippet or "")[:200],
         })
 
-    careers_url = f"https://{domain}/careers"
+    for row in _canonical_hiring_urls(company_name, domain, scraped):
+        _add(row["role"], row["source_url"], row["platform"], row.get("source_title"), row.get("snippet"))
+
+    careers_url = ((scraped or {}).get("_page_urls") or {}).get("careers_text") or f"https://{domain}/careers"
     if careers_text:
         for line in re.split(r"[\n•|]", careers_text):
             line = line.strip()
             if len(line) < 8 or len(line) > 100:
                 continue
-            if auth.looks_like_serp_title(line, ""):
-                continue
-            if re.search(r"(engineer|developer|manager|designer|architect|analyst|consultant|lead|head of)", line, re.I):
+            if re.search(r"(engineer|developer|manager|designer|architect|analyst|consultant|lead|head of|scientist|specialist)", line, re.I):
                 _add(line, careers_url, "Official Careers", line, careers_text[:200])
 
     queries = [
         (f'site:{domain} (careers OR jobs) "{company_name}"', "Official Careers"),
-        (f'site:linkedin.com/company "{company_name}" jobs', "LinkedIn Company"),
+        (f'site:linkedin.com/company {company_name} jobs', "LinkedIn"),
+        (f'site:naukri.com {company_name} jobs', "Naukri"),
+        (f'site:indeed.com/cmp {company_name} jobs', "Indeed"),
+        (f'site:glassdoor.com {company_name} jobs', "Glassdoor"),
         (f'site:boards.greenhouse.io {company_name}', "Company ATS"),
         (f'site:jobs.lever.co {company_name}', "Company ATS"),
         (f'site:myworkdayjobs.com {company_name}', "Company ATS"),
     ]
     if RESEARCH_SKIP_HIRING_SEARCH:
-        print("[Research] Hiring web-search reduced (fast mode — official careers + LinkedIn only)")
-        queries = queries[:2]
+        print("[Research] Hiring web-search: official + LinkedIn + Naukri + Indeed (fast)")
+        queries = queries[:4]
 
-    for query, platform in queries:
-        results = _ddg_search(query, max_results=3)
-        for r in results:
-            href = r.get("href", "")
-            title = r.get("title", "")
-            body = r.get("body", "")
-            if not href.startswith("http"):
-                continue
-            role = title
-            for pat in [
-                r"^(.+?)\s+at\s+",
-                r"^(.+?)\s*[-–|]\s*",
-            ]:
-                m = re.search(pat, title, re.I)
-                if m:
-                    cand = m.group(1).strip()
-                    if not auth.looks_like_serp_title(cand, title):
-                        role = cand
-                        break
-            _add(role, href, platform, title, body)
+    if queries:
+        with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
+            futs = {pool.submit(_ddg_search, q, 3): plat for q, plat in queries}
+            for fut, platform in futs.items():
+                try:
+                    results = fut.result()
+                except Exception:
+                    results = []
+                for r in results or []:
+                    href = r.get("href", "")
+                    title = r.get("title", "")
+                    body = r.get("body", "")
+                    if not href.startswith("http"):
+                        continue
+                    role = title
+                    for pat in [r"^(.+?)\s+at\s+", r"^(.+?)\s*[-–|]\s*"]:
+                        m = re.search(pat, title, re.I)
+                        if m:
+                            cand = m.group(1).strip()
+                            if 4 <= len(cand) <= 80:
+                                role = cand
+                                break
+                    _add(role, href, platform, title, body)
 
-    return auth.filter_hiring_signals(signals, company_name, domain)
+    kept = auth.filter_hiring_signals(signals, company_name, domain)
+    if len(kept) < 2:
+        print("[Research] Hiring search thin — LLM public job-board fill + judge")
+        extra = _llm_hiring_fill(company_name, domain)
+        kept = auth.filter_hiring_signals(list(kept) + extra, company_name, domain) or kept
+        if extra and not kept:
+            kept = auth.filter_hiring_signals(extra, company_name, domain) or extra[:4]
+
+    _SAFE_HIRE = {
+        "official_careers", "linkedin_company_jobs", "naukri", "indeed",
+        "ats", "glassdoor", "job_board",
+    }
+    needs_judge = kept and any((h.get("authenticity") or "") not in _SAFE_HIRE for h in kept)
+    if needs_judge:
+        try:
+            from backend.services import llm_judge
+            verdict = llm_judge.judge_hiring_signals(
+                company_name=company_name, domain=domain, signals=kept
+            )
+            keep_urls = {u.rstrip("/").lower() for u in (verdict.get("keep_urls") or [])}
+            if keep_urls:
+                judged = []
+                for h in kept:
+                    href = (h.get("source_url") or "").rstrip("/").lower()
+                    kind = h.get("authenticity") or ""
+                    if href in keep_urls or kind in _SAFE_HIRE:
+                        judged.append(h)
+                if judged:
+                    kept = judged
+        except Exception as e:
+            print(f"[Research] Hiring judge skipped: {e}")
+
+    print("[Research] Hiring kept " + str(len(kept)) + " pages: "
+          + ", ".join(sorted({h.get("platform") or "?" for h in kept})))
+    return kept[:8]
 
 
 def _ai_conclusion_from_hiring(company_name: str, hiring: list, report: dict) -> dict:
@@ -5575,7 +5733,7 @@ def run(url: str) -> dict:
     print("[Research] Phase 4: Verifying official hiring signals...")
     t0 = time.time()
     careers_text = scraped.get("careers_text") or ""
-    hiring = _fetch_hiring_signals(company_name, domain, careers_text)
+    hiring = _fetch_hiring_signals(company_name, domain, careers_text, scraped)
     if RESEARCH_LLM_ENRICH and not hiring:
         if not profile_fill:
             print("[Research] Public-profile fill for missing hiring status")
@@ -5603,12 +5761,14 @@ def run(url: str) -> dict:
                 hiring.append(rec)
                 break
     print(f"[Research] Phase 4 done in {time.time()-t0:.1f}s")
-    uniq_hire, seen_roles = [], set()
+    uniq_hire, seen_keys = [], set()
     for h in hiring or []:
-        role = (h.get("role") or "").strip().lower()
-        if not role or role in seen_roles:
+        role = (h.get("role") or "").strip()
+        href = (h.get("source_url") or "").split("?")[0].rstrip("/").lower()
+        key = href or role.lower()
+        if not role or key in seen_keys:
             continue
-        seen_roles.add(role)
+        seen_keys.add(key)
         uniq_hire.append(h)
     report["hiring_signals"] = uniq_hire[:8]
     conc = auth.hiring_conclusion(company_name, uniq_hire)
@@ -5704,6 +5864,8 @@ def run(url: str) -> dict:
     if wd.get("matched"):
         if _hq_missing() and wd.get("headquarters"):
             cp["headquarters"] = _field(wd["headquarters"], "Wikidata", "High")
+        if wd.get("founded_year") and _founded_missing():
+            cp["founded"] = _field(wd["founded_year"], "Wikidata", "High")
     if _hq_missing() and (profile_fill or {}).get("headquarters"):
         cp["headquarters"] = _field(profile_fill["headquarters"], "Public company profiles", "Medium")
     if _founded_missing() and (profile_fill or {}).get("founded"):
@@ -5717,8 +5879,6 @@ def run(url: str) -> dict:
             )
             for u in hq_fill.get("urls") or []:
                 _add_cite("Company profile", u, "Public Web")
-    if wd.get("founded_year") and _founded_missing():
-        cp["founded"] = _field(wd["founded_year"], "Wikidata", "High")
     if wd.get("employees"):
         emp_v = _field_text(cp.get("employee_count"))
         if not emp_v or "not publicly" in emp_v.lower():

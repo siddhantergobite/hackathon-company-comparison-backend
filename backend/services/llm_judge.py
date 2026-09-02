@@ -286,13 +286,14 @@ def judge_hiring_signals(
         return {"keep_urls": [], "drop_reasons": ["no signals"]}
 
     prompt = f"""You judge hiring signals for a company-intelligence product.
-KEEP a row only if the employer is exactly "{company_name}" (domain {domain}).
+KEEP a row if the employer is exactly "{company_name}" (domain {domain}).
+KEEP official careers pages, jobs.{{domain}}, LinkedIn /company/.../jobs, Naukri company job pages,
+Indeed /cmp/ employer pages, Glassdoor employer job pages, and the company's own ATS.
 DROP:
 - keyword searches (product name + "jobs", e.g. "Microsoft 365 jobs in Pune")
 - consultant / partner / reseller jobs at OTHER companies
-- job-board articles, homepages, or "N job openings" SERP titles
-- LinkedIn URLs that are generic job-search pages, not the company's own jobs
-- counts that look like search-result titles rather than official tallies
+- job-board homepages, ads, or "N job openings" SERP titles with no employer page
+- LinkedIn keyword-search URLs (jobs/search?keywords=) that are not the company's page
 
 SIGNALS
 {json.dumps(compact)[:4000]}
@@ -306,7 +307,7 @@ Return JSON ONLY:
     try:
         raw = llm_client.chat(
             [
-                {"role": "system", "content": "Return valid JSON only. Prefer drop over a wrong job listing."},
+                {"role": "system", "content": "Return valid JSON only. Keep this employer's LinkedIn, Naukri, Indeed, Glassdoor, and official careers pages. Drop other employers and keyword searches."},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.0,
