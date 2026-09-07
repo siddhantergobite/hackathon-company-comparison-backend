@@ -138,6 +138,7 @@ class ExportPdfRequest(BaseModel):
     brochure: dict
     target: dict
     pitch: Optional[dict] = None
+    aeo: Optional[dict] = None
 
 
 @app.post("/api/brochure-upload")
@@ -177,14 +178,15 @@ async def api_generate_pitch(req: GeneratePitchRequest):
 
 @app.post("/api/export-pdf")
 async def api_export_pdf(req: ExportPdfRequest):
-    """Export full casefile as PDF."""
+    """Export full casefile as a branded PDF (exhibits A–D, F if present)."""
     try:
-        pdf_bytes = pdf_export.run(req.brochure, req.target, req.pitch)
+        pdf_bytes = pdf_export.run(req.brochure, req.target, req.pitch, req.aeo)
+        filename = pdf_export.filename_for(req.brochure, req.target)
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": 'attachment; filename="casefile-report.pdf"',
+                "Content-Disposition": f'attachment; filename="{filename}"',
                 "Access-Control-Expose-Headers": "Content-Disposition",
             },
         )

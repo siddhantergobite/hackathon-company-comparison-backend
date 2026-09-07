@@ -674,7 +674,12 @@ function updatePdfTitle() {
   const title = document.getElementById('pdf-title');
   const sub = document.getElementById('pdf-subtitle');
   if (title && state.brochure && state.target) title.textContent = `${bName} → ${tName}`;
-  if (sub && state.brochure && state.target) sub.textContent = 'Pitch, intel, and outreach draft ready to export.';
+  if (sub && state.brochure && state.target) {
+    const bits = ['brochure', 'target intel'];
+    if (state.pitch) bits.push('pitch match', 'outreach draft');
+    if (state.aeo) bits.push('AEO/GEO audit');
+    sub.textContent = 'Branded Casefile PDF — ' + bits.join(', ') + '.';
+  }
 }
 
 async function generatePitch() {
@@ -692,6 +697,7 @@ async function generatePitch() {
     if (!r.ok) throw new Error(d.detail || 'Pitch failed');
     state.pitch = d;
     renderPitch(d);
+    updatePdfTitle();
   } catch (e) {
     alert('Pitch failed: ' + e.message);
   } finally {
@@ -790,6 +796,7 @@ async function runAeoGeo() {
     if (!r.ok) throw new Error(d.detail || 'AEO/GEO audit failed');
     state.aeo = d;
     renderAeoGeo(d);
+    updatePdfTitle();
     if (content) content.style.display = 'block';
   } catch (e) {
     alert('AEO/GEO audit failed: ' + (e.message || e));
@@ -906,20 +913,41 @@ function renderAeoGeo(data) {
 
 async function downloadPdf() {
   if (!state.brochure || !state.target) return alert('Complete Exhibits A & B first');
+  const btn = document.getElementById('pdf-btn');
+  const prev = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Building report…'; }
   try {
     const r = await fetch(`${API}/api/export-pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ brochure: state.brochure, target: state.target, pitch: state.pitch }),
+      body: JSON.stringify({
+        brochure: state.brochure,
+        target: state.target,
+        pitch: state.pitch,
+        aeo: state.aeo,
+      }),
     });
-    if (!r.ok) throw new Error('PDF export failed');
+    if (!r.ok) {
+      let msg = 'PDF export failed';
+      try {
+        const j = await r.json();
+        if (j.detail) msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+      } catch (_) {}
+      throw new Error(msg);
+    }
     const blob = new Blob([await r.arrayBuffer()], { type: 'application/pdf' });
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = cd.match(/filename="([^"]+)"/);
+    const tName = state.target?._meta?.company_name || 'target';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'casefile-report.pdf';
+    a.download = m ? m[1] : `casefile-${String(tName).toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`;
     a.click();
+    URL.revokeObjectURL(a.href);
   } catch (e) {
     alert('PDF failed: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev || 'Download PDF'; }
   }
 }
 
