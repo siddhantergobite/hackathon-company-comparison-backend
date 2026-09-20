@@ -435,6 +435,24 @@ JSON schema:
     return found
 
 
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+
+def _find_emails(text: str) -> list:
+    """All e-mail addresses in `text`, first-seen order, no duplicates.
+
+    Scanning a large page (minified JS, inline base64) with the bare pattern is quadratic: one
+    2.6 MB homepage took ~9 s. Anchoring on each '@' and looking only at its neighbourhood finds
+    the same addresses in milliseconds (a local part is at most 64 chars, a domain at most 255).
+    """
+    out: dict = {}
+    for m in re.finditer("@", text or ""):
+        seg = text[max(0, m.start() - 64): m.end() + 255]
+        for e in _EMAIL_RE.findall(seg):
+            out.setdefault(e, None)
+    return list(out)
+
+
 def _verify_cin(cin: str, company_name: str, domain: str) -> dict:
     """
     Verify CIN against MCA mirror (Zauba). Accept only if page CIN matches
@@ -707,7 +725,7 @@ def _extract_entity_signals(scraped: dict, url: str, raw_html: str = "") -> dict
             legal_names.append(title_stem)
 
     email_pat = r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
-    emails = list(dict.fromkeys(re.findall(email_pat, combined, re.I)))[:12]
+    emails = _find_emails(combined)[:12]
     corporate_emails = [
         e.lower() for e in emails
         if stem and (stem in e.lower() or e.lower().endswith("@" + domain))
@@ -1715,7 +1733,7 @@ def _scrape_contact_page(origin: str, raw_html: str = "", homepage_soup=None,
             })
 
         # Plain emails in text
-        for email in email_pat.findall(page_text):
+        for email in _find_emails(page_text):
             email = email.lower()
             if email in found_e or "example" in email or "domain.com" in email:
                 continue
@@ -1811,7 +1829,7 @@ def _scrape_contact_page(origin: str, raw_html: str = "", homepage_soup=None,
         return target, None
 
     if not contact["addresses"] or not (contact["emails"] or contact["phones"]):
-        with ThreadPoolExecutor(max_workers=min(4, len(contact_urls))) as pool:
+        with ThreadPoolExecutor(max_workers=min(6, len(contact_urls))) as pool:
             for final_url, html in pool.map(_fetch_contact, contact_urls):
                 if html:
                     _parse_html(html, "Contact page")
@@ -2082,7 +2100,7 @@ def _scrape_website(url: str, include_wiki: bool = False) -> dict:
 
         # Emails & phones (quick pass from raw HTML before footer is removed)
         email_pat = r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
-        result["emails"] = list(set(re.findall(email_pat, resp.text)))[:10]
+        result["emails"] = _find_emails(resp.text)[:10]
 
         # Clean homepage body text for LLM (footer removed here only for body_text)
         soup_body = BeautifulSoup(resp.text, "html.parser")
@@ -2944,8 +2962,22 @@ def _parse_llm_json(raw: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# Evidence blobs computed in the background while the main LLM call runs, keyed by (company, domain).
+_EVIDENCE_PREFETCH: dict = {}
+
+
 def _site_evidence_blob(company_name: str, domain: str, scraped: dict) -> str:
     """Website + search snippets the verifier can check a claim against."""
+    pending = _EVIDENCE_PREFETCH.pop((company_name, domain), None)
+    if pending is not None:
+        try:
+            return pending.result()
+        except Exception as e:  # noqa: BLE001 - fall through and compute it here
+            print(f"[Research] Prefetched evidence failed ({e}) - recomputing")
+    return _build_site_evidence_blob(company_name, domain, scraped)
+
+
+def _build_site_evidence_blob(company_name: str, domain: str, scraped: dict) -> str:
     structured = (scraped or {}).get("_structured") or {}
     cd = (scraped or {}).get("contact_data") or {}
     parts = [
@@ -5506,6 +5538,15 @@ def run(url: str) -> dict:
     else:
         print("[Research] Phase 2 skipped (fast path — site + Wikipedia + Wikidata)")
 
+    # These three only need the scraped site data, not the LLM report, so they run in the
+    # background while the (slowest) main LLM call is in flight instead of one after another.
+    # A result is only used if the inputs it was computed with are still the ones we need.
+    prefetch_name = company_name
+    bg = ThreadPoolExecutor(max_workers=3, thread_name_prefix="prefetch")
+    f_hiring = bg.submit(_fetch_hiring_signals, prefetch_name, domain, scraped.get("careers_text") or "", scraped)
+    f_leaders = bg.submit(_collect_leadership, prefetch_name, domain, scraped, intel)
+    _EVIDENCE_PREFETCH[(prefetch_name, domain)] = bg.submit(_build_site_evidence_blob, prefetch_name, domain, scraped)
+
     print(f"[Research] Phase 3: Azure/LLM ({MODEL}) analysis...")
     t0 = time.time()
     prompt = _build_prompt(url, company_name, scraped, intel)
@@ -5567,11 +5608,17 @@ def run(url: str) -> dict:
     print(f"[Research] Injected contacts from {len(sources_used)} sources: "
           f"{len(merged_emails)} emails, {len(merged_phones)} phones")
 
+    # Leadership was gathered in the background; join it before the report is normalised.
+    try:
+        extracted = f_leaders.result()
+    except Exception as e:  # noqa: BLE001
+        print(f"[Research] Background leadership failed ({e}) - collecting inline")
+        extracted = _collect_leadership(company_name, domain, scraped, intel)
+
     # Fix Groq schema drift so Overview / SWOT / etc. always render
     report = _normalize_report(report, scraped, company_name, url, intel)
 
     # Leadership from public web + silent Azure gap-fill (never cite ChatGPT)
-    extracted = _collect_leadership(company_name, domain, scraped, intel)
     scrape_blob = " ".join([
         scraped.get("wikipedia_text") or "",
         scraped.get("leadership_text") or "",
@@ -5733,7 +5780,14 @@ def run(url: str) -> dict:
     print("[Research] Phase 4: Verifying official hiring signals...")
     t0 = time.time()
     careers_text = scraped.get("careers_text") or ""
-    hiring = _fetch_hiring_signals(company_name, domain, careers_text, scraped)
+    hiring = None
+    if company_name == prefetch_name:
+        try:
+            hiring = f_hiring.result()
+        except Exception as e:  # noqa: BLE001
+            print(f"[Research] Background hiring lookup failed ({e}) - retrying inline")
+    if hiring is None:
+        hiring = _fetch_hiring_signals(company_name, domain, careers_text, scraped)
     if RESEARCH_LLM_ENRICH and not hiring:
         if not profile_fill:
             print("[Research] Public-profile fill for missing hiring status")
@@ -5948,6 +6002,9 @@ def run(url: str) -> dict:
     report["intelligence_score"] = auth.compute_honest_scores(
         report, citations=citations, judge_quality=judge_q
     )
+
+    bg.shutdown(wait=False)
+    _EVIDENCE_PREFETCH.pop((prefetch_name, domain), None)   # not consumed when no profile fill was needed
 
     print(f"[Research] ====== Complete in {time.time()-t_all:.1f}s: contacts={len(cd.get('emails', []))}e/"
           f"{len(cd.get('phones', []))}p citations={len(citations)} "
