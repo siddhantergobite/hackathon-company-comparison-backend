@@ -31,5 +31,9 @@ echo.
 :start
 REM Open the Casefile UI once the server is up
 start "" cmd /c "timeout /t 4 /nobreak >nul && start http://127.0.0.1:8765/casefile/"
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
+REM Prefer the project venv (its packages are installed there). "python -m uvicorn" is used instead of
+REM uvicorn.exe because some machines block .exe launchers via Device Guard.
+set "PY=python"
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+"%PY%" -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
 pause

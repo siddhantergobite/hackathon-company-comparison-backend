@@ -4,6 +4,16 @@ Run: uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
 
 UI: http://127.0.0.1:8765/casefile/
 """
+# Verify HTTPS with the operating system trust store. Python bundles its own CA list and cannot
+# fetch missing intermediate certificates, so sites with an incomplete chain (fine in a browser)
+# failed to scrape and the research came back empty. Certificate checking stays ON.
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except Exception:  # noqa: BLE001 - optional; falls back to the bundled CA list
+    pass
+
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -199,6 +209,8 @@ async def api_brochure_search(req: BrochureSearchRequest):
     try:
         result = brochure_extract.from_company_search(req.company_name)
         return JSONResponse(content=result)
+    except ValueError as e:  # unreadable site / missing name: the caller's input, not a server fault
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

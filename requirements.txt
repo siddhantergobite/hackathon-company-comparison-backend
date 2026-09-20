@@ -27,3 +27,4 @@ pydantic-settings
 pycountry
 feedparser
 pytest
+truststore

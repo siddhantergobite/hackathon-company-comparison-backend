@@ -290,6 +290,10 @@ def _normalize_url(text: str) -> str:
     return t
 
 
+# Below this many words a scrape is effectively empty (blocked, offline, or JS-only).
+_MIN_READABLE_WORDS = 30
+
+
 def _collect_scrape_text(scraped: dict) -> str:
     """Merge homepage + all sub-pages into one text blob."""
     parts = [
@@ -458,6 +462,12 @@ def from_company_search(company_name: str) -> dict:
         combined = _collect_scrape_text(scraped)
         word_count = len(combined.split())
 
+        if word_count < _MIN_READABLE_WORDS:
+            raise ValueError(
+                f"Could not read the website {url}. Nothing was made up. "
+                "Check the address, or upload a brochure instead."
+            )
+
         # If site is JS-heavy and scrape is thin, use full research pipeline
         if word_count < 150:
             report = company_research.run(url)
@@ -521,6 +531,13 @@ def from_company_search(company_name: str) -> dict:
         raise ValueError(
             f"Could not find reliable public data for '{query}'. "
             "Try pasting the full company URL (e.g. https://ergobite.com/us/) instead."
+        )
+
+    if url and word_count < _MIN_READABLE_WORDS:
+        # Nothing usable was read from the site: the model would only be guessing from the name.
+        raise ValueError(
+            f"Could not read the website for '{query}' ({url}). Nothing was made up. "
+            "Paste a URL that loads, or upload a brochure instead."
         )
 
     if word_count < 150 and url:
