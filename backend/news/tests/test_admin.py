@@ -149,10 +149,13 @@ def test_enrich_endpoint_reports_when_ai_is_unavailable(client, db, admin_header
 
 
 # --------------------------------------------------------------------------------- seeding
-def test_default_sources_are_seeded_once_and_never_overwrite_edits(db):
+def test_default_sources_are_seeded_once_and_never_overwrite_edits(db, monkeypatch):
     from backend.news.config import get_settings
     from backend.news.sources import ensure_default_sources
 
+    monkeypatch.setenv("NEWS_API_KEY", "")     # a real key in .env must not change what this test asserts
+    get_settings.cache_clear()
+    monkeypatch.setattr(get_settings(), "news_api_key", "")
     n = ensure_default_sources(db, get_settings())
     assert n >= 40 and db["news_sources"].count_documents({"type": "rss"}) >= 40
     db["news_sources"].update_one({"_id": "bbc-news"}, {"$set": {"enabled": False, "poll_minutes": 99}})

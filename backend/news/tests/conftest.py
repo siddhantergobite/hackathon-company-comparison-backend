@@ -10,6 +10,7 @@ os.environ["NEWS_MONGO_DB"] = "news_data_pytest"
 os.environ["NEWS_ADMIN_API_KEY"] = "test-admin-key"
 os.environ["NEWS_WORKER_ENABLED"] = "false"
 os.environ["NEWS_AI_ENABLED"] = "false"
+os.environ["NEWS_API_KEY"] = ""          # never let a real key in .env leak into tests
 os.environ.setdefault("NEWS_MONGO_URI", os.environ.get("EVENT_MONGO_URI", "mongodb://localhost:27017"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
