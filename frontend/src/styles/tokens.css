@@ -1,0 +1,100 @@
+/* Design tokens — every colour, radius and shadow in the app comes from here. */
+:root {
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --bg: #f5f6fb;
+  --surface: #ffffff;
+  --surface-2: #f8f9fd;
+  --surface-3: #eef0f8;
+  --border: #e2e5f0;
+  --border-strong: #cdd2e3;
+
+  --text: #0f172a;
+  --text-2: #334155;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-soft: #eef0ff;
+  --primary-text: #4338ca;
+  --on-primary: #ffffff;
+
+  --success: #15803d;
+  --success-soft: #e6f6ec;
+  --warning: #b45309;
+  --warning-soft: #fdf1dd;
+  --danger: #b91c1c;
+  --danger-soft: #fdeaea;
+  --info: #1d4ed8;
+  --info-soft: #e7effe;
+  --teal: #0f766e;
+  --teal-soft: #dff4f1;
+
+  --sidebar-bg: #0f1226;
+  --sidebar-text: #a5abc6;
+  --sidebar-text-strong: #ffffff;
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+  --sidebar-active: rgba(129, 140, 248, 0.16);
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+
+  --hero-from: #312e81;
+  --hero-via: #4f46e5;
+  --hero-to: #7c3aed;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 14px rgba(15, 23, 42, 0.07);
+  --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.14);
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+
+  --sidebar-width: 272px;
+  --topbar-height: 64px;
+  --focus-ring: 0 0 0 3px rgba(79, 70, 229, 0.35);
+}
+
+:root[data-theme='dark'] {
+  --bg: #0a0e1d;
+  --surface: #121a30;
+  --surface-2: #0f1730;
+  --surface-3: #1a2340;
+  --border: #243052;
+  --border-strong: #33426b;
+
+  --text: #e8ecf8;
+  --text-2: #c3cbe3;
+  --text-muted: #94a0c0;
+  --text-faint: #6b7796;
+
+  --primary: #818cf8;
+  --primary-hover: #a5b4fc;
+  --primary-soft: rgba(129, 140, 248, 0.15);
+  --primary-text: #a5b4fc;
+  --on-primary: #0a0e1d;
+
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.13);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.13);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.14);
+  --info: #7cb0ff;
+  --info-soft: rgba(124, 176, 255, 0.14);
+  --teal: #2dd4bf;
+  --teal-soft: rgba(45, 212, 191, 0.14);
+
+  --sidebar-bg: #070a17;
+  --sidebar-border: rgba(255, 255, 255, 0.07);
+
+  --hero-from: #1e1b4b;
+  --hero-via: #3730a3;
+  --hero-to: #5b21b6;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --focus-ring: 0 0 0 3px rgba(129, 140, 248, 0.45);
+}

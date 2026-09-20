@@ -1,0 +1,46 @@
+{
+  "_comment": "Copy to sources.json (gitignored) and edit. Only add feeds whose publishers permit this use; keep respect_robots true.",
+  "feeds": [
+    {
+      "name": "example-startup-calendar",
+      "label": "Example Startup Calendar",
+      "group": "startup",
+      "type": "ical",
+      "url": "https://example.com/events.ics",
+      "site_url": "https://example.com",
+      "enabled": false,
+      "respect_robots": true,
+      "min_interval_seconds": 2,
+      "license": "Publisher-provided iCal feed; used with permission (record terms here)",
+      "defaults": {
+        "event_type": "startup_event",
+        "city": "Berlin",
+        "country": "Germany",
+        "categories": ["Startups"]
+      }
+    },
+    {
+      "name": "example-conference-json",
+      "label": "Example Conference API",
+      "group": "conference",
+      "type": "json",
+      "url": "https://example.com/api/events.json",
+      "items_path": "data.events",
+      "mapping": {
+        "title": "name",
+        "description": "about",
+        "start": "starts_at",
+        "end": "ends_at",
+        "event_url": "url",
+        "source_event_id": "id",
+        "city": "venue.city",
+        "country": "venue.country",
+        "venue": "venue.name",
+        "image_url": "image"
+      },
+      "enabled": false,
+      "respect_robots": true,
+      "defaults": { "event_type": "conference" }
+    }
+  ]
+}

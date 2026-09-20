@@ -20,3 +20,10 @@ pymupdf
 python-docx
 reportlab
 pypdf
+
+# Event Hub (event aggregator)
+pymongo
+pydantic-settings
+pycountry
+feedparser
+pytest

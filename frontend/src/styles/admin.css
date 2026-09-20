@@ -1,0 +1,178 @@
+/* ---------- Event Hub: admin ---------- */
+.adm-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 24px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+}
+.adm-tab {
+  margin-bottom: -1px;
+  padding: 10px 16px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.adm-tab:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+.adm-tab.is-active {
+  border-bottom-color: var(--primary);
+  color: var(--primary-text);
+}
+
+.adm-login {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 440px;
+  margin: 24px auto;
+  text-align: center;
+}
+.adm-login form {
+  text-align: left;
+}
+.adm-login__icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto;
+  border-radius: 14px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.adm-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.adm-filters__search {
+  flex: 1 1 260px;
+}
+.adm-filters > .input {
+  width: auto;
+}
+.adm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.adm-table td {
+  vertical-align: middle;
+}
+.adm-table tr.is-busy {
+  opacity: 0.5;
+}
+.adm-title {
+  font-weight: 600;
+}
+.adm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.adm-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.adm-grid--4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.adm-grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.adm-field--wide {
+  grid-column: 1 / -1;
+}
+.adm-req {
+  color: var(--danger);
+}
+.adm-error {
+  margin-top: 5px;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+.adm-formbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 0 6px;
+  background: linear-gradient(transparent, var(--bg) 35%);
+}
+
+.adm-dup__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.adm-dup__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.adm-dup__side {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.adm-dup__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.adm-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.adm-picker button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  text-align: left;
+}
+.adm-picker button:hover {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+@media (max-width: 900px) {
+  .adm-grid--4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .adm-grid,
+  .adm-grid--4,
+  .adm-grid--2,
+  .adm-dup__pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

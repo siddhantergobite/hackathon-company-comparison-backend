@@ -14,6 +14,21 @@ set PYTHONIOENCODING=utf-8
 echo Working dir: %CD%
 echo Using .env at: %CD%\.env
 echo.
+REM Build the React UI on first run (needs Node.js); otherwise the legacy UI is served
+if exist "frontend\dist\index.html" goto start
+where npm >nul 2>nul
+if errorlevel 1 (
+  echo [warn] Node.js not found - serving the legacy UI. Install Node.js to use the React UI.
+  goto start
+)
+echo Building the React UI ^(first run only^)...
+pushd frontend
+call npm install
+call npm run build
+popd
+echo.
+
+:start
 REM Open the Casefile UI once the server is up
 start "" cmd /c "timeout /t 4 /nobreak >nul && start http://127.0.0.1:8765/casefile/"
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
