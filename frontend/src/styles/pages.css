@@ -518,3 +518,58 @@
     background: #fff;
   }
 }
+
+.job-bench-grid,
+.job-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.job-bench-card {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2, var(--surface));
+}
+.job-bench-card strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.job-result-card {
+  margin: 0;
+}
+.job-match {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.job-match .form-hint {
+  margin: 0;
+}
+.job-description {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.job-description summary {
+  cursor: pointer;
+  color: var(--primary-text);
+}
+.job-description p {
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+@media (max-width: 900px) {
+  .job-bench-grid,
+  .job-card-grid {
+    grid-template-columns: 1fr;
+  }
+}

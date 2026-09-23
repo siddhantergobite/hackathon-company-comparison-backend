@@ -76,6 +76,54 @@ export const api = {
       'AEO/GEO audit failed',
     ),
 
+  async talentBench() {
+    const { response } = await send('/api/talent-bench', { method: 'GET' }, 'Could not load talent bench');
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      /* non-JSON */
+    }
+    if (!response.ok) throw new Error(detailToMessage(data?.detail, 'Could not load talent bench'));
+    return data;
+  },
+
+  async talentUpload(file, slotId) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const q = slotId ? `?slot_id=${encodeURIComponent(slotId)}` : '';
+    const { response } = await send(
+      `/api/talent-bench/upload${q}`,
+      { method: 'POST', body: fd },
+    );
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      /* non-JSON */
+    }
+    if (!response.ok) throw new Error(detailToMessage(data?.detail, 'Resume upload failed'));
+    return data;
+  },
+
+  async talentClear(slotId) {
+    const { response } = await send(`/api/talent-bench/${encodeURIComponent(slotId)}`, { method: 'DELETE' });
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      /* non-JSON */
+    }
+    if (!response.ok) throw new Error(detailToMessage(data?.detail, 'Could not clear resume'));
+    return data;
+  },
+
+  liveJobsScan: () =>
+    postJson('/api/live-jobs/scan', { minutes: 30, sources: ['linkedin', 'naukri'] }, 'Job scan failed'),
+
+  liveJobsIngest: (url) =>
+    postJson('/api/live-jobs/ingest', { url, days: 14 }, 'Could not load jobs from that URL'),
+
   async exportPdf({ brochure, target, pitch, aeo }) {
     const { response } = await send('/api/export-pdf', {
       method: 'POST',

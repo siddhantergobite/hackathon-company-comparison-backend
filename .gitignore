@@ -31,3 +31,5 @@ temp/
 
 # Event Hub feed config (local)
 backend/events/collectors/sources.json
+
+data/live_jobs/

@@ -1,0 +1,67 @@
+---
+description: Rebuild Exhibit G Live Jobs exactly as implemented (do not drop when Vrushank UI is merged)
+alwaysApply: true
+---
+
+# Exhibit G — Live Jobs (preserve exactly)
+
+This feature is **not** in Vrushank’s UI drop. After pulling his files into a new repo, **rebuild Live Jobs as it exists in this conversation**. Do not replace it with DuckDuckGo `"minutes ago"` searches. Do not auto-DM LinkedIn/Naukri.
+
+## Source of truth (copy these, then restyle to match new UI)
+
+- `backend/services/live_jobs.py` — entire service (copy file as-is if it still exists)
+- `backend/main.py` — import `live_jobs` and the Exhibit G routes below
+- Casefile **Exhibit G** tab (`data-view="v7"`) + JS in `casefile/app.js`
+- `.gitignore` — `data/live_jobs/`
+
+## Product behavior
+
+- Nav tab after AEO/GEO: **Exhibit G — Live Jobs**
+- Roles: **AI + software only**
+- Talent bench: 4 slots — `ai_1`, `ai_2`, `software_1`, `software_2` (PDF/DOCX upload; matching can stay empty until resumes exist)
+- Scan: prefer jobs **posted ≤ 30 minutes**; if fewer than 12, **fill from last 60 minutes** up to 20 jobs. Never show days/weeks/months-old JDs.
+- Outreach: **copy-ready draft** only (clipboard + optional mailto). Does **not** log in or send LinkedIn/Naukri messages.
+- Optional: paste a public LinkedIn `/jobs/view/` or Naukri `/job-listings` URL (`POST /api/live-jobs/ingest`)
+
+## Discovery (this was the working version)
+
+- **Primary:** LinkedIn public guest search (no login):
+  `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=...&f_TPR=r3600&start=0|10`
+- Keywords: software engineer, machine learning engineer, AI engineer, python developer, full stack developer, data scientist, backend engineer, generative AI
+- Parse `div.base-card` / `div.job-search-card`: title, company, `a[href*=/jobs/view/]`, `<time>` relative text first (`14 minutes ago`), then `datetime`
+- Do **not** fetch LinkedIn job detail pages (authwall strips time)
+- If LinkedIn card has no parsed age, treat as 60 minutes because `f_TPR=r3600` is already past hour
+- **Naukri:** public jobapi is captcha-walled; DDG `site:naukri.com/job-listings "..."` is secondary and usually thin. Be honest in UI copy.
+- **Do not** use DuckDuckGo `site:linkedin.com/jobs/view ("minutes ago" OR "just now")` — that returns zero live jobs
+
+## APIs (wire exactly)
+
+- `GET /api/talent-bench`
+- `POST /api/talent-bench/upload?slot_id=ai_1` (multipart `file`)
+- `DELETE /api/talent-bench/{slot_id}`
+- `POST /api/live-jobs/scan` `{ "minutes": 30, "sources": ["linkedin","naukri"] }`
+- `POST /api/live-jobs/ingest` `{ "url": "..." }`
+- `POST /api/live-jobs/outreach` `{ "job": {...}, "slot_id": "ai_1"|null }`
+
+Scan response includes `jobs`, `window_minutes`, `fallback_used`, `in_window_count`, `_meta.note`.
+
+Job recency labels: `posted_in_window` | `posted_in_fallback`. Sort freshest first. Cap `MAX_JOBS = 20`.
+
+## UI pieces to port (restyle to Vrushank’s design, same behavior)
+
+- Talent grid (4 upload slots)
+- Job URL input + Ingest URL + **Scan last 30 minutes**
+- KPI chips: in window, listed, bench loaded, window (30 min vs 1 hour fallback)
+- Job cards: track tag, platform, title, company, recency, Open post, Draft text
+- Outreach panel: copy LinkedIn text, mailto if email found, open job post
+
+## Storage
+
+- `data/live_jobs/bench.json` — resumes parsed via `brochure_extract._extract_text` + Azure JSON profile
+- Gitignore the folder; do not commit resumes
+
+## Hard rules
+
+- No LinkedIn/Naukri login, cookies, or captcha bypass
+- Azure OpenAI already used for resume parse + outreach JSON
+- Port remains **8765**; start with `py -3.11 -m uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload`

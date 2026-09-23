@@ -1,4 +1,4 @@
-import { Building2, CalendarDays, Download, FileText, Globe2, Newspaper, Send, Settings2, ShieldCheck, Sparkles } from 'lucide-react';
+import { Briefcase, Building2, CalendarDays, Download, FileText, Globe2, Newspaper, Send, Settings2, ShieldCheck, Sparkles } from 'lucide-react';
 
 // One entry per exhibit. `isDone` drives the progress ticks in the sidebar.
 export const WORKFLOW = [
@@ -52,6 +52,14 @@ export const TOOLS = [
     hint: 'Answer-engine visibility',
     icon: Globe2,
     isDone: (s) => Boolean(s.aeo),
+  },
+  {
+    path: '/live-jobs',
+    exhibit: 'G',
+    title: 'Live Jobs',
+    hint: 'AI & software roles, last 30 min',
+    icon: Briefcase,
+    isDone: () => false,
   },
 ];
 

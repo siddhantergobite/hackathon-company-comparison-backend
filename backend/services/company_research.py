@@ -5400,7 +5400,7 @@ def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = ""
                             cand = m.group(1).strip()
                             if 4 <= len(cand) <= 80:
                                 role = cand
-                                break
+                            break
                     _add(role, href, platform, title, body)
 
     kept = auth.filter_hiring_signals(signals, company_name, domain)

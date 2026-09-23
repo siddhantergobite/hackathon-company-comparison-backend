@@ -8,6 +8,7 @@ import PitchPage from './pages/PitchPage';
 import OutreachPage from './pages/OutreachPage';
 import ExportPage from './pages/ExportPage';
 import AeoGeoPage from './pages/AeoGeoPage';
+import LiveJobsPage from './pages/LiveJobsPage';
 import NotFoundPage from './pages/NotFoundPage';
 import EventsPage from './pages/events/EventsPage';
 import EventDetailPage from './pages/events/EventDetailPage';
@@ -43,6 +44,7 @@ export default function App() {
               <Route path="outreach" element={<OutreachPage />} />
               <Route path="export" element={<ExportPage />} />
               <Route path="aeo-geo" element={<AeoGeoPage />} />
+              <Route path="live-jobs" element={<LiveJobsPage />} />
               <Route path="events" element={<EventsPage />} />
               <Route path="events/:slug" element={<EventDetailPage />} />
               <Route path="admin" element={<AdminLayout />}>

@@ -18,7 +18,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response, JSONResponse
@@ -31,6 +31,7 @@ from backend.services import (
     pitch_generator,
     pdf_export,
     aeo_geo,
+    live_jobs,
 )
 
 # Event Hub (MongoDB-backed event aggregator). Optional: if its packages are missing the
@@ -166,6 +167,64 @@ async def api_aeo_geo_audit(req: AeoGeoAuditRequest):
             max_serp_searches=req.max_serp_searches,
         )
         return JSONResponse(content=result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Live jobs (Exhibit G) ────────────────────────────────────────────────────
+
+class LiveJobsScanRequest(BaseModel):
+    minutes: int = 30
+    sources: Optional[list[str]] = None
+
+
+class LiveJobUrlRequest(BaseModel):
+    url: str
+    days: Optional[int] = 14
+
+
+@app.get("/api/talent-bench")
+def api_talent_bench():
+    return JSONResponse(content=live_jobs.get_bench())
+
+
+@app.post("/api/talent-bench/upload")
+async def api_talent_bench_upload(
+    file: UploadFile = File(...),
+    slot_id: Optional[str] = Query(None),
+):
+    try:
+        data = await file.read()
+        result = live_jobs.save_resume(file.filename or "resume.pdf", data, slot_id)
+        return JSONResponse(content=result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/talent-bench/{slot_id}")
+def api_talent_bench_clear(slot_id: str):
+    try:
+        return JSONResponse(content=live_jobs.clear_resume(slot_id))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/live-jobs/scan")
+def api_live_jobs_scan(req: LiveJobsScanRequest):
+    try:
+        return JSONResponse(content=live_jobs.scan(minutes=req.minutes, sources=req.sources))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/live-jobs/ingest")
+def api_live_jobs_ingest(req: LiveJobUrlRequest):
+    try:
+        return JSONResponse(content=live_jobs.ingest_url(req.url, days=req.days or 14))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
