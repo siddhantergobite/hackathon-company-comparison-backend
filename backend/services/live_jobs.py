@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 import uuid
@@ -38,8 +39,12 @@ TPR_TWO_WEEKS = f"r{URL_DISCOVER_DAYS * 24 * 3600}"
 MAX_JOBS = 20
 MAX_URL_JOBS = 20
 MAX_JOB_DETAIL_FETCH = 8
+NAUKRI_SCAN_TARGET_MIN = 5
+NAUKRI_SCAN_TARGET_MAX = 8
+MAX_NAUKRI_SCAN_DETAIL_FETCH = NAUKRI_SCAN_TARGET_MIN
 PAGE_FETCH = 20
 HTTP_TIMEOUT = 10
+SEARCH_TIMEOUT_SECONDS = 6
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -274,26 +279,71 @@ def get_bench() -> dict:
 
 
 def _ddg(query: str, max_results: int = 10, timelimit: Optional[str] = "d") -> list[dict]:
+    """Search public indexes; use the configured SerpApi provider when available."""
+    # Separate from SERPAPI_KEY used by AEO so a live-jobs scan never consumes
+    # another feature's quota unexpectedly.
+    serpapi_key = (os.getenv("LIVE_JOBS_SERPAPI_KEY") or "").strip()
+    if serpapi_key:
+        params = {
+            "engine": "google",
+            "q": query,
+            "api_key": serpapi_key,
+            "num": min(max(1, int(max_results)), 100),
+            "hl": "en",
+            "gl": "in",
+        }
+        if timelimit in ("d", "w", "m"):
+            params["tbs"] = {"d": "qdr:d", "w": "qdr:w", "m": "qdr:m"}[timelimit]
+        try:
+            response = requests.get(
+                "https://serpapi.com/search", params=params, timeout=SEARCH_TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("error"):
+                raise RuntimeError("SerpApi returned a search error")
+            rows = payload.get("organic_results") or []
+            normalized = []
+            for row in rows[:max_results]:
+                url = (row.get("link") or "").strip()
+                if url:
+                    normalized.append({
+                        "title": (row.get("title") or "").strip(),
+                        "url": url,
+                        "snippet": (row.get("snippet") or "").strip(),
+                        "search_provider": "serpapi_google",
+                    })
+            # Do not silently substitute another index on a successful empty
+            # response: that would make provider attribution and quotas unclear.
+            return normalized
+        except Exception as exc:
+            # Never include request URLs here: SerpApi places its credential in
+            # the query string. Fall back to the no-key public search provider.
+            print(f"[LiveJobs] SerpApi search failed ({type(exc).__name__}); falling back to DDG")
+
     rows: list[dict] = []
     kwargs = {"max_results": max_results}
     if timelimit:
         kwargs["timelimit"] = timelimit
+    def run_ddgs(DDGS):
+        try:
+            client = DDGS(timeout=SEARCH_TIMEOUT_SECONDS)
+        except TypeError:
+            client = DDGS()
+        with client as ddgs:
+            try:
+                return list(ddgs.text(query, **kwargs))
+            except TypeError:
+                return list(ddgs.text(query, max_results=max_results))
+
     try:
         from ddgs import DDGS
-        with DDGS() as ddgs:
-            try:
-                rows = list(ddgs.text(query, **kwargs))
-            except TypeError:
-                rows = list(ddgs.text(query, max_results=max_results))
+        rows = run_ddgs(DDGS)
     except Exception as e1:
         print(f"[LiveJobs] ddgs '{query}': {e1}")
         try:
             from duckduckgo_search import DDGS as LegacyDDGS
-            with LegacyDDGS() as ddgs:
-                try:
-                    rows = list(ddgs.text(query, **kwargs))
-                except TypeError:
-                    rows = list(ddgs.text(query, max_results=max_results))
+            rows = run_ddgs(LegacyDDGS)
         except Exception as e2:
             print(f"[LiveJobs] legacy DDG '{query}': {e2}")
             return []
@@ -306,6 +356,7 @@ def _ddg(query: str, max_results: int = 10, timelimit: Optional[str] = "d") -> l
             "title": (r.get("title") or "").strip(),
             "url": url,
             "snippet": (r.get("body") or r.get("snippet") or "").strip(),
+            "search_provider": "duckduckgo",
         })
     return out
 
@@ -603,12 +654,42 @@ def _queries(sources: list[str], terms: Optional[list[str]] = None) -> list[str]
             continue
         # Keep title and skills as separate searchable terms; exact-quoting a
         # whole phrase such as "backend engineer Spring Boot Java" is too narrow.
-        q.append(f"site:naukri.com/job-listings {safe}")
+        # Do not constrain the index to one path: Naukri publishes jobs under
+        # multiple URL shapes and DuckDuckGo was returning zero for this path
+        # restriction even when it indexed matching Naukri job pages.
+        q.append(f'site:naukri.com "{safe}"')
     return q
 
 
+def _collect_naukri_hits(queries: list[str]) -> dict[str, Any]:
+    hits: list[dict] = []
+    errors: list[str] = []
+    provider_counts: dict[str, int] = {}
+    if not queries:
+        return {"hits": hits, "errors": errors, "provider_counts": provider_counts}
+    with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
+        futures = {pool.submit(_ddg, query, 12, None): query for query in queries}
+        for future in as_completed(futures):
+            query = futures[future]
+            try:
+                rows = future.result() or []
+                hits.extend(rows)
+                for row in rows:
+                    provider = row.get("search_provider") or "unknown"
+                    provider_counts[provider] = provider_counts.get(provider, 0) + 1
+            except Exception as exc:
+                # Keep diagnostics useful without returning query text or secrets.
+                errors.append(type(exc).__name__)
+    return {"hits": hits, "errors": errors, "provider_counts": provider_counts}
+
+
 def _heuristic_search_queries(people: list[dict]) -> list[str]:
-    """Build role + real resume-skill queries, fairly across the talent bench."""
+    """Build broad role-first queries, then progressively add resume skills.
+
+    Search indexes often do not contain every skill in the source listing. Starting
+    with role-only queries improves recall; skill-specific queries are additional
+    refinements rather than a requirement for a listing to be discovered.
+    """
     query_sets: list[list[str]] = []
     preferred_skills = {
         "mobile": ("kotlin", "android sdk", "jetpack compose", "flutter", "swift"),
@@ -652,13 +733,11 @@ def _heuristic_search_queries(people: list[dict]) -> list[str]:
         chosen = [normalized[key] for key in preferred_skills[family] if key in normalized]
         if not chosen:
             chosen = [skill for skill in skills if skill.lower() not in GENERIC_SKILLS][:2]
-        variants = []
+        variants = [role[:100]]
         if chosen:
-            variants.append(" ".join([role, *chosen[:2]])[:100])
-            if len(chosen) > 2:
-                variants.append(" ".join([role, chosen[2]])[:100])
-        else:
-            variants.append(role[:100])
+            variants.append(" ".join([role, chosen[0]])[:100])
+            if len(chosen) > 1:
+                variants.append(" ".join([role, chosen[1]])[:100])
         query_sets.append(variants)
 
     # Round-robin means an 8-query search reaches 8 different resumes before
@@ -687,8 +766,8 @@ def search_queries_for_scan(bench: dict) -> list[str]:
     return _heuristic_search_queries(people)
 
 NAUKRI_BLOCKED_NOTE = (
-    "Naukri results currently come from public web-search discovery, not an authorized Naukri job-search API; "
-    "coverage may be limited and undated listings are excluded."
+    "Naukri discovery uses public web-search indexing, not a Naukri-authorized search API. "
+    "Date-unverified results are shown separately and are not counted as fresh."
 )
 
 
@@ -1089,6 +1168,7 @@ def scan(
     sources: Optional[list[str]] = None,
     include_unverified_recent: bool = False,
 ) -> dict:
+    started_at = time.monotonic()
     minutes = max(5, min(int(minutes or WINDOW_MINUTES_DEFAULT), 180))
     src = [s.lower().strip() for s in (sources or ["linkedin", "naukri"]) if s]
     src = [s for s in src if s in ("linkedin", "naukri")] or ["linkedin", "naukri"]
@@ -1098,23 +1178,72 @@ def scan(
     search_terms = resume_terms or list(DEFAULT_SEARCH_QUERIES)
 
     queries = _queries(src, search_terms)
-    hits: list[dict] = []
     errors: list[str] = []
     now = _now()
     jobs_map: dict[str, dict] = {}
     dropped = {"junk": 0, "not_role": 0, "stale_or_unknown": 0}
+    source_diagnostics: dict[str, dict[str, Any]] = {
+        source: {
+            "queries_attempted": 0,
+            "search_results": 0,
+            "job_urls_accepted": 0,
+            "unique_jobs": 0,
+            "detail_pages_attempted": 0,
+            "detail_pages_read": 0,
+            "posting_dates_verified": 0,
+            "within_requested_window": 0,
+            "within_fallback_window": 0,
+            "date_unverified": 0,
+            "outside_fallback_window": 0,
+            "search_providers": {},
+        }
+        for source in src
+    }
+
+    linkedin_rows: list[dict] = []
+    naukri_search = {"hits": [], "errors": [], "provider_counts": {}}
+    # Run provider searches concurrently so adding Naukri does not add its full
+    # network latency on top of LinkedIn's latency.
+    with ThreadPoolExecutor(max_workers=2) as provider_pool:
+        linkedin_future = None
+        naukri_future = None
+        if "linkedin" in src:
+            source_diagnostics["linkedin"]["queries_attempted"] = min(
+                len(search_terms) * (2 if len(search_terms) <= 4 else 1), 8
+            )
+            linkedin_future = provider_pool.submit(_collect_linkedin_live, search_terms)
+        if "naukri" in src:
+            source_diagnostics["naukri"]["queries_attempted"] = len(queries)
+            naukri_future = provider_pool.submit(_collect_naukri_hits, queries)
+        if linkedin_future:
+            try:
+                linkedin_rows = linkedin_future.result() or []
+            except Exception as exc:
+                errors.append(f"LinkedIn search failed: {type(exc).__name__}")
+        if naukri_future:
+            try:
+                naukri_search = naukri_future.result() or naukri_search
+                errors.extend(f"Naukri search failed: {name}" for name in naukri_search["errors"])
+            except Exception as exc:
+                errors.append(f"Naukri search failed: {type(exc).__name__}")
 
     if "linkedin" in src:
-        for row in _collect_linkedin_live(search_terms):
+        source_diagnostics["linkedin"]["search_results"] = len(linkedin_rows)
+        for row in linkedin_rows:
             url = _clean_job_url(row.get("url") or "")
             if not url:
                 continue
+            if not _is_job_url(url) or _platform(url) != "LinkedIn":
+                continue
+            source_diagnostics["linkedin"]["job_urls_accepted"] += 1
             title = row.get("title") or ""
             snippet = row.get("snippet") or ""
             if _is_junk_listing(title, snippet):
                 dropped["junk"] += 1
                 continue
             jid = _job_id(url)
+            if jid not in jobs_map:
+                source_diagnostics["linkedin"]["unique_jobs"] += 1
             jobs_map[jid] = {
                 "id": jid,
                 "title": title[:140],
@@ -1132,18 +1261,14 @@ def scan(
             }
 
     if "naukri" in src:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            futs = {pool.submit(_ddg, q, 12, "d"): q for q in queries}
-            for fut in as_completed(futs):
-                q = futs[fut]
-                try:
-                    hits.extend(fut.result() or [])
-                except Exception as e:
-                    errors.append(f"{q}: {e}")
+        hits = naukri_search["hits"]
+        source_diagnostics["naukri"]["search_results"] = len(hits)
+        source_diagnostics["naukri"]["search_providers"] = naukri_search["provider_counts"]
         for h in hits:
             url = _clean_job_url(h.get("url") or "")
             if not _is_job_url(url) or _platform(url) != "Naukri":
                 continue
+            source_diagnostics["naukri"]["job_urls_accepted"] += 1
             title_raw = h.get("title") or ""
             snippet = h.get("snippet") or ""
             if _is_junk_listing(title_raw, snippet):
@@ -1154,6 +1279,7 @@ def scan(
             jid = _job_id(url)
             if jid in jobs_map:
                 continue
+            source_diagnostics["naukri"]["unique_jobs"] += 1
             jobs_map[jid] = {
                 "id": jid,
                 "title": (role or title_raw)[:140],
@@ -1170,7 +1296,13 @@ def scan(
             }
 
     candidates = list(jobs_map.values())
-    naukri_need_fetch = [j for j in candidates if j["platform"] == "Naukri"][:12]
+    naukri_need_fetch = [
+        job for job in candidates
+        if job["platform"] == "Naukri"
+        and (job.get("posted_minutes") is None or len(job.get("snippet") or "") < 80)
+    ][:MAX_NAUKRI_SCAN_DETAIL_FETCH]
+    if "naukri" in source_diagnostics:
+        source_diagnostics["naukri"]["detail_pages_attempted"] = len(naukri_need_fetch)
     with ThreadPoolExecutor(max_workers=6) as pool:
         futs = {pool.submit(_fetch_job_page, j["url"]): j for j in naukri_need_fetch}
         for fut in as_completed(futs):
@@ -1178,6 +1310,8 @@ def scan(
             page = fut.result() or {}
             html = page.get("html") or ""
             text = page.get("text") or ""
+            if html or text:
+                source_diagnostics["naukri"]["detail_pages_read"] += 1
             description = (page.get("description") or text).strip()
             if description:
                 job["description"] = description[:8000]
@@ -1194,37 +1328,79 @@ def scan(
     fallback = FALLBACK_MINUTES
     jobs_primary = []
     jobs_fallback = []
+    jobs_unverified = []
     for job in candidates:
         age = job.get("posted_minutes")
         if age is None and job.get("platform") == "LinkedIn":
             # LinkedIn guest search is already f_TPR=r3600 (past hour).
             age = fallback
             job["posted_minutes"] = age
+            job["date_confidence"] = "source_window_only"
+        elif age is not None:
+            job["date_confidence"] = "listing_timestamp"
         if in_posted_window(age, minutes):
             job["recency"] = "posted_in_window"
             jobs_primary.append(job)
         elif in_posted_window(age, fallback):
             job["recency"] = "posted_in_fallback"
             jobs_fallback.append(job)
+        elif age is None and job.get("platform") == "Naukri":
+            job["recency"] = "date_unverified"
+            job["date_confidence"] = "unverified"
+            jobs_unverified.append(job)
         else:
             dropped["stale_or_unknown"] += 1
+
+        stats = source_diagnostics.get(str(job.get("platform") or "").lower())
+        if stats is None:
+            stats = source_diagnostics.get("linkedin" if job.get("platform") == "LinkedIn" else "naukri")
+        if stats is not None:
+            if age is None:
+                stats["date_unverified"] += 1
+            else:
+                stats["posting_dates_verified"] += 1
+                if age <= minutes:
+                    stats["within_requested_window"] += 1
+                elif age <= fallback:
+                    stats["within_fallback_window"] += 1
+                else:
+                    stats["outside_fallback_window"] += 1
 
     jobs_primary.sort(key=lambda j: j["posted_minutes"] if j["posted_minutes"] is not None else 9999)
     jobs_fallback.sort(key=lambda j: j["posted_minutes"] if j["posted_minutes"] is not None else 9999)
 
-    jobs = jobs_primary[:]
     fallback_used = False
-    if len(jobs) < 12:
-        seen_ids = {j["id"] for j in jobs}
-        extra = [j for j in jobs_fallback if j["id"] not in seen_ids]
-        take = extra[: max(0, 20 - len(jobs))]
-        if take:
-            jobs.extend(take)
-            fallback_used = True
-    applied = minutes if jobs_primary and not fallback_used else (fallback if jobs else minutes)
+    fallback_used = bool(jobs_fallback and (len(jobs_primary) < 12))
+    applied = minutes if jobs_primary and not fallback_used else (fallback if jobs_fallback else minutes)
     if jobs_primary and fallback_used:
         applied = fallback
-    jobs = jobs[:MAX_JOBS]
+
+    # Reserve up to 8 of the 20 displayed slots for Naukri. Use dated Naukri
+    # results first, then undated ones; LinkedIn fills only the remaining slots.
+    # This targets 5–8 Naukri jobs without inventing or padding results.
+    naukri_verified = sorted(
+        (job for job in jobs_primary + jobs_fallback if job.get("platform") == "Naukri"),
+        key=lambda job: job.get("posted_minutes") if job.get("posted_minutes") is not None else 99999,
+    )[:NAUKRI_SCAN_TARGET_MAX]
+    linkedin_verified = sorted(
+        (job for job in jobs_primary + jobs_fallback if job.get("platform") == "LinkedIn"),
+        key=lambda job: job.get("posted_minutes") if job.get("posted_minutes") is not None else 99999,
+    )
+    jobs_unverified.sort(key=lambda job: (job.get("company") or "").lower())
+    unverified_slots = max(0, NAUKRI_SCAN_TARGET_MAX - len(naukri_verified))
+    selected_naukri_unverified = (
+        jobs_unverified[:unverified_slots] if include_unverified_recent else []
+    )
+    selected_linkedin = linkedin_verified[: max(0, MAX_JOBS - len(naukri_verified) - len(selected_naukri_unverified))]
+    verified_jobs = sorted(
+        naukri_verified + selected_linkedin,
+        key=lambda job: job.get("posted_minutes") if job.get("posted_minutes") is not None else 99999,
+    )
+    jobs = verified_jobs + selected_naukri_unverified
+    if "naukri" in source_diagnostics:
+        source_diagnostics["naukri"]["displayed_jobs"] = len(naukri_verified) + len(selected_naukri_unverified)
+        source_diagnostics["naukri"]["display_target_min"] = NAUKRI_SCAN_TARGET_MIN
+        source_diagnostics["naukri"]["display_target_max"] = NAUKRI_SCAN_TARGET_MAX
 
     _enrich_linkedin_descriptions(jobs)
 
@@ -1248,23 +1424,35 @@ def scan(
             f"No listings proven within {minutes} minutes, so results are the last {fallback} minutes. "
             "Days/weeks/months-old JDs stay hidden."
         )
-    elif jobs:
-        note = f"Showing jobs proven posted in the last {minutes} minutes (freshest first)."
+    elif verified_jobs:
+        note = f"Showing {len(verified_jobs)} jobs with dates inside the requested/1-hour window."
     else:
         note = (
             f"No matching jobs could be proven within {minutes} minutes or the {fallback}-minute fallback."
         )
+    if jobs_unverified and not include_unverified_recent:
+        note += f" {len(jobs_unverified)} Naukri listing(s) had no verifiable posting date and were omitted."
+    elif include_unverified_recent and any(j.get("recency") == "date_unverified" for j in jobs):
+        note += " Naukri listings without a verifiable date are included separately and are not counted as fresh."
+    if "naukri" in source_diagnostics and source_diagnostics["naukri"]["displayed_jobs"] < NAUKRI_SCAN_TARGET_MIN:
+        shown = source_diagnostics["naukri"]["displayed_jobs"]
+        note += f" Naukri target is {NAUKRI_SCAN_TARGET_MIN}–{NAUKRI_SCAN_TARGET_MAX}; this search found only {shown} usable listing(s), so none were fabricated."
     note = f"{note}{qnote} {NAUKRI_BLOCKED_NOTE}"
     return {
         "window_minutes": applied,
         "window_requested": minutes,
         "window_fallback": fallback,
+        "elapsed_ms": int((time.monotonic() - started_at) * 1000),
         "fallback_used": fallback_used,
         "scanned_at": _iso(now),
         "sources": src,
         "job_count": len(jobs),
-        "in_window_count": len(jobs),
+        "in_window_count": len(verified_jobs),
+        "verified_job_count": len(verified_jobs),
+        "unverified_job_count": len(selected_naukri_unverified),
+        "requested_window_count": len(jobs_primary),
         "dropped": dropped,
+        "source_diagnostics": source_diagnostics,
         "bench_loaded": sum(1 for p in (bench.get("people") or {}).values() if p.get("loaded")),
         "search_queries": search_terms,
         "jobs": jobs,
@@ -1334,15 +1522,32 @@ def _linkedin_company_id(url: str, slug: str = "") -> str:
     return ""
 
 
-def _finalize_url_jobs(rows: list[dict], company: str, require_company: bool) -> list[dict]:
+def _finalize_url_jobs(
+    rows: list[dict],
+    company: str,
+    require_company: bool,
+    *,
+    window_days: int = URL_DISCOVER_DAYS,
+    metrics: Optional[dict] = None,
+) -> list[dict]:
     bench = get_bench()
     seen = set()
     out = []
+    stats = metrics if metrics is not None else {}
+    stats.update({
+        "search_results": len(rows or []),
+        "unique_job_urls": 0,
+        "posting_dates_verified": 0,
+        "within_window": 0,
+        "date_unverified": 0,
+        "outside_window": 0,
+    })
     for row in rows or []:
         href = _clean_job_url(row.get("url") or "")
         if not href or href in seen:
             continue
         seen.add(href)
+        stats["unique_job_urls"] += 1
         title = (row.get("title") or "").strip()
         snippet = (row.get("snippet") or "").strip()
         if _is_junk_listing(title, snippet):
@@ -1353,19 +1558,31 @@ def _finalize_url_jobs(rows: list[dict], company: str, require_company: bool) ->
         age = row.get("posted_minutes")
         if age is None:
             age = extract_age_minutes(f"{title} {snippet} {row.get('description') or ''}")
-        if not in_posted_window(age, URL_DISCOVER_MINUTES):
+        platform = row.get("platform") or _platform(href) or "Web"
+        is_date_unverified = age is None and platform == "Naukri"
+        if is_date_unverified:
+            stats["date_unverified"] += 1
+        elif age is not None:
+            stats["posting_dates_verified"] += 1
+            if not in_posted_window(age, window_days * 24 * 60):
+                stats["outside_window"] += 1
+                continue
+            stats["within_window"] += 1
+        else:
+            stats["date_unverified"] += 1
             continue
         job = {
             "id": _job_id(href),
             "title": (title or "Job listing")[:140],
             "company": co or company,
             "url": href,
-            "platform": row.get("platform") or _platform(href) or "Web",
+            "platform": platform,
             "track": row.get("track") or _role_track(f"{title} {snippet}") or "software",
             "snippet": snippet[:400],
             "posted_minutes": age,
             "first_seen_minutes": 0,
-            "recency": "posted_in_window",
+            "recency": "date_unverified" if is_date_unverified else "posted_in_window",
+            "date_confidence": "unverified" if is_date_unverified else "listing_timestamp",
             "emails": row.get("emails") or [],
             "description": (row.get("description") or snippet)[:8000],
             "source": row.get("source") or "",
@@ -1411,7 +1628,9 @@ def _naukri_company_jobs(company: str) -> list[dict]:
     ]
     hits: list[dict] = []
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futs = [pool.submit(_ddg, q, 12, "w") for q in queries]
+        # One bounded recent query plus one unrestricted indexed query. Exact
+        # dates are still checked downstream; undated hits are labeled as such.
+        futs = [pool.submit(_ddg, queries[0], 12, "w"), pool.submit(_ddg, queries[1], 12, None)]
         for fut in as_completed(futs):
             try:
                 hits.extend(fut.result() or [])
@@ -1438,6 +1657,7 @@ def _naukri_company_jobs(company: str) -> list[dict]:
             "snippet": snippet,
             "posted_minutes": age,
             "source": "naukri_ddg",
+            "search_provider": h.get("search_provider") or "unknown",
             "description": "",
         })
     need = [r for r in rows if r.get("posted_minutes") is None][:8]
@@ -1445,11 +1665,16 @@ def _naukri_company_jobs(company: str) -> list[dict]:
         futs = {pool.submit(_fetch_job_page, r["url"]): r for r in need}
         for fut in as_completed(futs):
             job = futs[fut]
-            page = fut.result() or {}
+            try:
+                page = fut.result() or {}
+            except Exception as exc:
+                print(f"[LiveJobs] Naukri detail fetch failed ({type(exc).__name__})")
+                continue
             html = page.get("html") or ""
             text = page.get("text") or ""
             if text:
                 job["description"] = text[:2500]
+            job["detail_page_read"] = bool(html or text)
             age = extract_age_minutes(f"{html} {text} {job.get('snippet','')} {job.get('title','')}")
             if age is not None:
                 job["posted_minutes"] = age
@@ -1512,15 +1737,29 @@ def _classify_source_url(url: str) -> dict:
     return {"kind": "website", "company": name, "company_id": "", "platform": "web"}
 
 
-def _ingest_payload(mode: str, jobs: list[dict], *, url: str, company: str, note: str) -> dict:
+def _ingest_payload(
+    mode: str,
+    jobs: list[dict],
+    *,
+    url: str,
+    company: str,
+    note: str,
+    days: int = URL_DISCOVER_DAYS,
+    source_diagnostics: Optional[dict] = None,
+) -> dict:
+    verified_count = sum(1 for job in jobs if job.get("recency") == "posted_in_window")
+    unverified_count = sum(1 for job in jobs if job.get("recency") == "date_unverified")
     return {
         "mode": mode,
         "url": url,
         "company": company,
-        "window_days": URL_DISCOVER_DAYS,
-        "window_minutes": URL_DISCOVER_MINUTES,
+        "window_days": days,
+        "window_minutes": days * 24 * 60,
         "job_count": len(jobs),
-        "in_window_count": len(jobs),
+        "in_window_count": verified_count,
+        "verified_job_count": verified_count,
+        "unverified_job_count": unverified_count,
+        "source_diagnostics": source_diagnostics or {},
         "jobs": jobs,
         "job": jobs[0] if jobs else None,
         "scanned_at": _iso(),
@@ -1544,10 +1783,18 @@ def ingest_url(url: str, days: int = URL_DISCOVER_DAYS) -> dict:
         age = job.get("posted_minutes")
         if age is not None and age > days * 24 * 60:
             job["recency"] = "too_old_or_unknown"
+        elif age is None and job.get("platform") == "Naukri":
+            job["recency"] = "date_unverified"
+            job["date_confidence"] = "unverified"
         note = "Ingested that one public job post."
         if job.get("recency") == "too_old_or_unknown":
-            note += " Posting date is older than 2 weeks or could not be verified."
-        return _ingest_payload("job", [job], url=url, company=job.get("company") or "", note=note)
+            note += f" Posting date is older than {days} days."
+        if job.get("recency") == "date_unverified":
+            note += " Posting date could not be verified; this job is not counted as in-window."
+        return _ingest_payload(
+            "job", [job], url=url, company=job.get("company") or "", note=note, days=days,
+            source_diagnostics={"naukri": {"direct_job_url": 1, "date_unverified": int(age is None)}},
+        )
 
     info = _classify_source_url(url)
     company = info.get("company") or ""
@@ -1564,16 +1811,57 @@ def ingest_url(url: str, days: int = URL_DISCOVER_DAYS) -> dict:
         rows.extend(_greenhouse_board_jobs(url))
 
     require_name = not (kind == "linkedin_company" and info.get("company_id"))
-    jobs = _finalize_url_jobs(rows, company, require_company=require_name)
+    ingest_stats: dict[str, int] = {}
+    jobs = _finalize_url_jobs(
+        rows,
+        company,
+        require_company=require_name,
+        window_days=days,
+        metrics=ingest_stats,
+    )
+    source_stats: dict[str, dict] = {}
+    for platform, source_name, query_count in (("Naukri", "naukri", 2), ("LinkedIn", "linkedin", 6), ("Greenhouse", "greenhouse", 1)):
+        source_rows = [row for row in rows if (row.get("platform") or _platform(row.get("url") or "")) == platform]
+        if not source_rows:
+            continue
+        stat = {
+            "queries_attempted": query_count,
+            "search_results": len(source_rows),
+            "unique_job_urls": len({_clean_job_url(row.get("url") or "") for row in source_rows if row.get("url")}),
+            "posting_dates_verified": 0,
+            "within_window": 0,
+            "date_unverified": 0,
+            "outside_window": 0,
+            "detail_pages_attempted": min(8, sum(1 for row in source_rows if row.get("posted_minutes") is None)) if platform == "Naukri" else 0,
+            "detail_pages_read": sum(1 for row in source_rows if row.get("detail_page_read")),
+            "search_providers": {},
+        }
+        for row in source_rows:
+            age = row.get("posted_minutes")
+            if age is None:
+                age = extract_age_minutes(f"{row.get('title') or ''} {row.get('snippet') or ''} {row.get('description') or ''}")
+            if age is None:
+                stat["date_unverified"] += 1
+            else:
+                stat["posting_dates_verified"] += 1
+                if age <= days * 24 * 60:
+                    stat["within_window"] += 1
+                else:
+                    stat["outside_window"] += 1
+            provider = row.get("search_provider") or row.get("source") or "unknown"
+            stat["search_providers"][provider] = stat["search_providers"].get(provider, 0) + 1
+        source_stats[source_name] = stat
     if kind == "linkedin_company":
         note = (
             f"Jobs at {company or 'this company'} on LinkedIn (and Naukri when dated) posted in the last "
-            f"{days} days. Listings without a verifiable date stay hidden."
+            f"{days} days. Naukri listings without a verifiable date are shown separately and are not counted as fresh."
         )
     elif kind == "naukri":
         note = (
-            f"Naukri listings for {company} posted in the last {days} days. "
-            f"{NAUKRI_BLOCKED_NOTE} Undated results are dropped."
+            f"Naukri search found {len(rows)} candidate listing(s) for {company}; "
+            f"{sum(1 for j in jobs if j.get('recency') == 'posted_in_window')} have dates inside {days} days "
+            f"and {sum(1 for j in jobs if j.get('recency') == 'date_unverified')} have unverified dates. "
+            f"{NAUKRI_BLOCKED_NOTE}"
         )
     elif kind == "greenhouse":
         note = (
@@ -1583,11 +1871,14 @@ def ingest_url(url: str, days: int = URL_DISCOVER_DAYS) -> dict:
     else:
         note = (
             f"Public jobs matching {company} from LinkedIn and Naukri in the last {days} days. "
-            "Only rows with a verifiable posting date are shown."
+            "Naukri listings without a verifiable date are shown separately and are not counted as fresh."
         )
     if not jobs:
         note += " Nothing proven in that window — the company may have no dated public posts right now."
-    return _ingest_payload(kind, jobs, url=url, company=company, note=note)
+    return _ingest_payload(
+        kind, jobs, url=url, company=company, note=note, days=days,
+        source_diagnostics=source_stats or {kind: ingest_stats},
+    )
 
 
 def _ingest_single_job(url: str) -> dict:

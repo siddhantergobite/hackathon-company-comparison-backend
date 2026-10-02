@@ -119,7 +119,11 @@ export const api = {
   },
 
   liveJobsScan: () =>
-    postJson('/api/live-jobs/scan', { minutes: 30, sources: ['linkedin', 'naukri'] }, 'Job scan failed'),
+    postJson('/api/live-jobs/scan', {
+      minutes: 30,
+      sources: ['linkedin', 'naukri'],
+      include_unverified_recent: true,
+    }, 'Job scan failed'),
 
   liveJobsIngest: (url) =>
     postJson('/api/live-jobs/ingest', { url, days: 14 }, 'Could not load jobs from that URL'),

@@ -176,6 +176,7 @@ async def api_aeo_geo_audit(req: AeoGeoAuditRequest):
 class LiveJobsScanRequest(BaseModel):
     minutes: int = 30
     sources: Optional[list[str]] = None
+    include_unverified_recent: bool = True
 
 
 class LiveJobUrlRequest(BaseModel):
@@ -214,7 +215,11 @@ def api_talent_bench_clear(slot_id: str):
 @app.post("/api/live-jobs/scan")
 def api_live_jobs_scan(req: LiveJobsScanRequest):
     try:
-        return JSONResponse(content=live_jobs.scan(minutes=req.minutes, sources=req.sources))
+        return JSONResponse(content=live_jobs.scan(
+            minutes=req.minutes,
+            sources=req.sources,
+            include_unverified_recent=req.include_unverified_recent,
+        ))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -50,6 +50,7 @@ AZURE_OPENAI_MODEL=gpt-5-mini
 GROQ_API_KEY=              # optional
 GEMINI_API_KEY=            # optional text fallback
 SERPAPI_KEY=               # optional AEO SERP checks
+LIVE_JOBS_SERPAPI_KEY=     # optional Live Jobs search; blank uses DuckDuckGo
 RESEARCH_USE_GROQ=0
 
 # Fast research is the default (~40–70 s for most public companies).
@@ -67,6 +68,7 @@ For the other tools (all optional, see the commented blocks in `.env.example`):
 | `NEWS_ADMIN_API_KEY` | Password for `/casefile/news-admin` (falls back to `EVENT_ADMIN_API_KEY`) |
 | `NEWS_API_KEY` | NewsAPI.org key, only for the Reuters/AP source |
 | `NEWS_AI_ENABLED`, `NEWS_AI_MAX_PER_CYCLE` | AI summaries on/off, and how many articles per cycle |
+| `LIVE_JOBS_SERPAPI_KEY` | Optional dedicated Google/SerpApi search for Live Jobs; consumes SerpApi quota. Blank uses DuckDuckGo. This improves indexed discovery but is not a Naukri-authorized job API. |
 
 Generate an admin key: `python -c "import secrets; print(secrets.token_urlsafe(32))"`. **Never commit `.env`** (it is git-ignored).
 
