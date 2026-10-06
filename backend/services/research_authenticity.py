@@ -339,6 +339,24 @@ def select_point_of_contact(report: dict) -> dict:
     co = report.get("company_profile") or {}
     company = flatten_display(co.get("name")) or (report.get("_meta") or {}).get("company_name") or ""
 
+    # This field is populated only after the dedicated public-contact judge has
+    # accepted a candidate and attached at least one public source URL.  It must
+    # win over an anonymous inbox or an unverified scraped executive name.
+    judged_contact = contacts.get("public_point_of_contact")
+    if isinstance(judged_contact, dict) and judged_contact.get("verified") and judged_contact.get("source_urls"):
+        if any(judged_contact.get(k) for k in ("name", "email", "phone")):
+            return {
+                "name": (judged_contact.get("name") or "").strip(),
+                "title": judged_contact.get("title") or "",
+                "email": judged_contact.get("email") or "",
+                "phone": judged_contact.get("phone") or "",
+                "company": company,
+                "reason": judged_contact.get("reason") or "Verified against public company evidence",
+                "confidence": judged_contact.get("confidence") or "Medium",
+                "source": judged_contact.get("source") or "Public contact judge",
+                "source_urls": judged_contact.get("source_urls") or [],
+            }
+
     named_email = None
     for e in emails:
         if not isinstance(e, dict):
@@ -346,11 +364,13 @@ def select_point_of_contact(report: dict) -> dict:
         person = (e.get("person") or e.get("person_name") or e.get("name") or "").strip()
         em = (e.get("email") or "").strip()
         if person and em and "@" in em:
-            # skip generic if we have a person, still OK
-            named_email = e
+            # Prefer a named, non-generic inbox.  The old implementation kept
+            # the first generic inbox and never reached a later named address.
+            if named_email is None:
+                named_email = e
             if not re.match(r"(?i)^(info|hello|contact|support|sales|admin|hr)@", em):
+                named_email = e
                 break
-            named_email = named_email or e
 
     exec_ = None
     for l in leaders:
@@ -388,11 +408,11 @@ def select_point_of_contact(report: dict) -> dict:
     for p in phones:
         if not isinstance(p, dict):
             continue
-        pn = (p.get("person_name") or p.get("name") or "").lower()
+        pn = (p.get("person") or p.get("person_name") or p.get("name") or "").lower()
         if first and first in pn:
             phone = p.get("number") or ""
             if not name:
-                name = p.get("person_name") or p.get("name") or ""
+                name = p.get("person") or p.get("person_name") or p.get("name") or ""
             break
     if not phone and phones:
         p0 = phones[0]
@@ -413,6 +433,8 @@ def select_point_of_contact(report: dict) -> dict:
         "company": company,
         "reason": reason,
         "confidence": "High" if email or (name and exec_) else "Low",
+        "source": (named_email or {}).get("source") if named_email else (exec_ or {}).get("source", ""),
+        "source_urls": (named_email or {}).get("source_urls", []) if named_email else [],
     }
 
 
@@ -801,7 +823,7 @@ def compute_honest_scores(report: dict, citations: list | None = None, judge_qua
     verified += len(comps)
 
     summary_bits = [
-        f"Authenticity {authenticity}/100 (LLM-as-judge)",
+        f"Authenticity {authenticity}/100 ({'LLM-as-judge' if isinstance(judge_quality, int) else 'source/evidence checks'})",
         f"source reliability {reliability}/100",
         f"completeness {completeness}/100",
     ]

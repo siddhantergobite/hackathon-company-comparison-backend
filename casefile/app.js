@@ -437,6 +437,16 @@ function renderIntelPanels(report) {
 
   let contactHtml = '';
   const addr = ci.registered_address || val(co.registered_address);
+  const poc = report.point_of_contact || {};
+  if (hasData(poc.name) || hasData(poc.email) || hasData(poc.phone)) {
+    contactHtml += `<div class="contact-block"><strong>👤 Public point of contact</strong><br>
+      ${poc.name ? `<b>${esc(poc.name)}</b>${poc.title ? ' · ' + esc(poc.title) : ''}<br>` : ''}
+      ${poc.email ? esc(poc.email) + '<br>' : ''}
+      ${poc.phone ? esc(poc.phone) + '<br>' : ''}
+      ${poc.reason ? `<span style="font-size:12px;color:var(--text-muted);">${esc(poc.reason)}</span><br>` : ''}
+      ${poc.source || poc.confidence ? `<span class="cite-badge">${esc([poc.source, poc.confidence].filter(Boolean).join(' · '))}</span>` : ''}
+    </div>`;
+  }
   if (hasData(addr)) {
     contactHtml += `<div class="contact-block"><strong>📍 Registered Address</strong><br>${esc(addr)}
       ${ci.address_source ? `<br><span class="cite-badge">${esc(ci.address_source)}</span>` : ''}</div>`;
@@ -678,7 +688,7 @@ function updatePdfTitle() {
     const bits = ['brochure', 'target intel'];
     if (state.pitch) bits.push('pitch match', 'outreach draft');
     if (state.aeo) bits.push('AEO/GEO audit');
-    sub.textContent = 'Branded Casefile PDF — ' + bits.join(', ') + '.';
+    sub.textContent = 'Branded CompareFlow.ai PDF — ' + bits.join(', ') + '.';
   }
 }
 
@@ -941,7 +951,7 @@ async function downloadPdf() {
     const tName = state.target?._meta?.company_name || 'target';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = m ? m[1] : `casefile-${String(tName).toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`;
+    a.download = m ? m[1] : `compareflow-ai-${String(tName).toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`;
     a.click();
     URL.revokeObjectURL(a.href);
   } catch (e) {

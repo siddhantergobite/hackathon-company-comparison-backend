@@ -129,6 +129,96 @@ def test_resume_search_queries_prioritize_candidate_roles_then_refine_with_skill
     assert 'site:naukri.com "android developer"' in naukri_queries
 
 
+def test_linkedin_uses_structured_location_and_naukri_keeps_location_in_query(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        live_jobs,
+        "_linkedin_guest_search",
+        lambda keyword, start=0, tpr=live_jobs.TPR_PAST_HOUR, company_id=None, location=None: calls.append(
+            (keyword, start, tpr, company_id, location)
+        ) or [],
+    )
+
+    live_jobs._collect_linkedin_live(["AI engineer"], ["india"])
+
+    assert calls == [("AI engineer", 0, live_jobs.TPR_PAST_HOUR, None, "India"),
+                     ("AI engineer", 10, live_jobs.TPR_PAST_HOUR, None, "India")]
+    naukri = live_jobs._queries(["naukri"], ["AI engineer"], ["india"])
+    assert naukri == ['site:naukri.com AI engineer ("India")']
+
+
+def test_scan_terms_do_not_encode_location_as_a_linkedin_keyword(monkeypatch):
+    monkeypatch.setattr(live_jobs, "search_queries_for_scan", lambda _bench: ["AI engineer"])
+
+    terms, _ = live_jobs._scan_search_terms({"people": {}}, [], ["india"])
+
+    assert terms == ["AI engineer"]
+
+
+def test_live_scan_filters_jobs_by_selected_skills_and_locations(monkeypatch):
+    monkeypatch.setattr(live_jobs, "get_bench", lambda: {"people": {}})
+    monkeypatch.setattr(live_jobs, "search_queries_for_scan", lambda _bench: ["software engineer"])
+    monkeypatch.setattr(live_jobs, "_collect_linkedin_live", lambda _terms, _locations=None: [
+        {
+            "url": "https://www.linkedin.com/jobs/view/python-india",
+            "title": "Python Engineer",
+            "location": "Bengaluru, India",
+            "description": "Python and Django backend role",
+            "posted_minutes": 5,
+        },
+        {
+            "url": "https://www.linkedin.com/jobs/view/java-usa",
+            "title": "Java Engineer",
+            "location": "New York, USA",
+            "description": "Java and Spring Boot backend role",
+            "posted_minutes": 6,
+        },
+        {
+            "url": "https://www.linkedin.com/jobs/view/python-usa",
+            "title": "Python Engineer",
+            "location": "Seattle, USA",
+            "description": "Python and FastAPI backend role",
+            "posted_minutes": 7,
+        },
+        {
+            "url": "https://www.linkedin.com/jobs/view/rust-india",
+            "title": "Rust Engineer",
+            "location": "Pune, India",
+            "description": "Rust systems role",
+            "posted_minutes": 8,
+        },
+    ])
+    monkeypatch.setattr(live_jobs, "_enrich_linkedin_descriptions", lambda _jobs: None)
+
+    result = live_jobs.scan(
+        minutes=30,
+        sources=["linkedin"],
+        skills=["Python", "Java"],
+        locations=["india"],
+    )
+
+    assert [job["title"] for job in result["jobs"]] == ["Python Engineer"]
+    assert result["filters"] == {"skills": ["Python", "Java"], "locations": ["india"]}
+    assert result["dropped"]["skill_filter"] == 1
+    assert result["dropped"]["location_filter"] == 2
+    assert result["source_diagnostics"]["linkedin"]["filtered_by_skill"] == 1
+    assert result["source_diagnostics"]["linkedin"]["filtered_by_location"] == 2
+
+
+def test_live_scan_filters_support_ai_ml_and_cap_user_input():
+    assert live_jobs._normalize_scan_skills(
+        ["Python", "Java", "Kotlin", "AI/ML", "React", "Rust", "Python"]
+    ) == ["Python", "Java", "Kotlin", "AI/ML", "React"]
+    assert live_jobs._job_matches_skill_filters(
+        {"title": "Machine Learning Engineer", "description": "Build ML systems"},
+        ["AI/ML"],
+    )
+    assert not live_jobs._job_matches_skill_filters(
+        {"title": "Frontend Engineer", "description": "Build React interfaces"},
+        ["AI/ML"],
+    )
+
+
 def test_serpapi_search_normalizes_google_results_and_uses_dedicated_key(monkeypatch):
     monkeypatch.setenv("LIVE_JOBS_SERPAPI_KEY", "test-key")
     params_seen = {}
@@ -192,7 +282,7 @@ def test_naukri_undated_results_are_returned_but_not_counted_as_fresh(monkeypatc
 def test_undated_naukri_jobs_keep_visible_slots_when_linkedin_fills_verified_cap(monkeypatch):
     monkeypatch.setattr(live_jobs, "get_bench", lambda: {"people": {}})
     monkeypatch.setattr(live_jobs, "search_queries_for_scan", lambda _bench: ["software engineer"])
-    monkeypatch.setattr(live_jobs, "_collect_linkedin_live", lambda _terms: [
+    monkeypatch.setattr(live_jobs, "_collect_linkedin_live", lambda _terms, _locations=None: [
         {
             "url": f"https://www.linkedin.com/jobs/view/{index}",
             "title": f"Software Engineer {index}",

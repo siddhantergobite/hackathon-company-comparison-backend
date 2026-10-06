@@ -16,7 +16,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -38,6 +38,7 @@ TPR_PAST_HOUR = "r3600"
 TPR_TWO_WEEKS = f"r{URL_DISCOVER_DAYS * 24 * 3600}"
 MAX_JOBS = 20
 MAX_URL_JOBS = 20
+STREAM_BATCH_SIZE = 5
 MAX_JOB_DETAIL_FETCH = 8
 NAUKRI_SCAN_TARGET_MIN = 5
 NAUKRI_SCAN_TARGET_MAX = 8
@@ -51,6 +52,101 @@ USER_AGENT = (
 )
 
 MAX_BENCH_RESUMES = 20
+MAX_SCAN_SKILLS = 5
+MAX_SCAN_LOCATIONS = 10
+
+# These are deliberately a small, stable list for the live-job filter. The
+# aliases let a country filter work when a listing contains a major city or a
+# country abbreviation instead of the selected display label.
+LIVE_JOB_LOCATION_OPTIONS = (
+    {
+        "id": "india",
+        "label": "India",
+        "query": "India",
+        "aliases": (
+            "india", "new delhi", "delhi", "mumbai", "bengaluru", "bangalore",
+            "hyderabad", "pune", "chennai", "gurugram", "gurgaon", "noida",
+            "kolkata", "ahmedabad", "kochi",
+        ),
+    },
+    {
+        "id": "uk",
+        "label": "UK",
+        "query": "United Kingdom",
+        "aliases": (
+            "uk", "united kingdom", "england", "scotland", "wales",
+            "northern ireland", "london", "manchester", "birmingham",
+            "edinburgh", "glasgow", "cambridge", "oxford", "bristol",
+        ),
+    },
+    {
+        "id": "usa",
+        "label": "USA",
+        "query": "United States",
+        "aliases": (
+            "usa", "u.s.a", "united states", "u.s.", "us", "new york",
+            "san francisco", "california", "texas", "seattle", "boston",
+            "chicago", "austin", "los angeles", "washington",
+        ),
+    },
+    {
+        "id": "dubai",
+        "label": "Dubai",
+        "query": "Dubai",
+        "aliases": ("dubai",),
+    },
+    {
+        "id": "uae",
+        "label": "UAE",
+        "query": "United Arab Emirates",
+        "aliases": (
+            "uae", "u.a.e", "united arab emirates", "abu dhabi", "sharjah",
+            "ajman", "ras al khaimah", "fujairah", "umm al quwain", "dubai",
+        ),
+    },
+    {
+        "id": "singapore",
+        "label": "Singapore",
+        "query": "Singapore",
+        "aliases": ("singapore",),
+    },
+    {
+        "id": "canada",
+        "label": "Canada",
+        "query": "Canada",
+        "aliases": (
+            "canada", "toronto", "vancouver", "montreal", "calgary", "ottawa",
+            "edmonton", "waterloo",
+        ),
+    },
+    {
+        "id": "australia",
+        "label": "Australia",
+        "query": "Australia",
+        "aliases": (
+            "australia", "sydney", "melbourne", "brisbane", "perth", "adelaide",
+            "canberra",
+        ),
+    },
+    {
+        "id": "germany",
+        "label": "Germany",
+        "query": "Germany",
+        "aliases": (
+            "germany", "berlin", "munich", "münchen", "hamburg", "frankfurt",
+            "cologne",
+        ),
+    },
+    {
+        "id": "netherlands",
+        "label": "Netherlands",
+        "query": "Netherlands",
+        "aliases": (
+            "netherlands", "amsterdam", "rotterdam", "utrecht", "the hague",
+            "eindhoven", "holland",
+        ),
+    },
+)
 GENERIC_SKILLS = {
     "communication", "communication skills", "teamwork", "team player",
     "leadership", "ms office", "microsoft office", "excel", "word",
@@ -644,20 +740,32 @@ DEFAULT_SEARCH_QUERIES = (
 )
 
 
-def _queries(sources: list[str], terms: Optional[list[str]] = None) -> list[str]:
+def _queries(
+    sources: list[str],
+    terms: Optional[list[str]] = None,
+    locations: Optional[list[str]] = None,
+) -> list[str]:
     q = []
     if "naukri" not in sources:
         return q
+    location_expression = _location_query_expression(locations or [])
     for t in (terms or [])[:8]:
         safe = re.sub(r'["\']', " ", str(t)).strip()
         if len(safe) < 3:
             continue
+        if location_expression:
+            safe = f"{safe} {location_expression}"
         # Keep title and skills as separate searchable terms; exact-quoting a
         # whole phrase such as "backend engineer Spring Boot Java" is too narrow.
         # Do not constrain the index to one path: Naukri publishes jobs under
         # multiple URL shapes and DuckDuckGo was returning zero for this path
         # restriction even when it indexed matching Naukri job pages.
-        q.append(f'site:naukri.com "{safe}"')
+        # Keep ordinary terms exact (the existing resume-search behavior), but
+        # preserve an OR/location expression when a live scan uses one.
+        if re.search(r"\bOR\b|[()]", safe, re.I):
+            q.append(f"site:naukri.com {safe}")
+        else:
+            q.append(f'site:naukri.com "{safe}"')
     return q
 
 
@@ -800,6 +908,7 @@ def _linkedin_guest_search(
     start: int = 0,
     tpr: str = TPR_PAST_HOUR,
     company_id: Optional[str] = None,
+    location: Optional[str] = None,
 ) -> list[dict]:
     url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
     params: dict[str, Any] = {"f_TPR": tpr or TPR_PAST_HOUR, "start": int(start or 0)}
@@ -808,6 +917,8 @@ def _linkedin_guest_search(
         params["keywords"] = kw
     if company_id:
         params["f_C"] = str(company_id)
+    if location:
+        params["location"] = str(location).strip()
     if not kw and not company_id:
         return []
     label = kw or f"f_C={company_id}"
@@ -851,6 +962,7 @@ def _linkedin_guest_search(
             out.append({
                 "title": title or kw or "Job listing",
                 "company": company,
+                "location": loc,
                 "url": href,
                 "platform": "LinkedIn",
                 "track": track,
@@ -867,15 +979,27 @@ def _linkedin_guest_search(
         return []
 
 
-def _collect_linkedin_live(keywords: Optional[list[str]] = None) -> list[dict]:
+def _collect_linkedin_live(
+    keywords: Optional[list[str]] = None,
+    locations: Optional[list[str]] = None,
+) -> list[dict]:
     jobs: list[dict] = []
     kws = [str(k).strip() for k in (keywords or []) if str(k).strip()][:8]
     if not kws:
         return jobs
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futs = [pool.submit(_linkedin_guest_search, kw, 0) for kw in kws]
+    location_values = _linkedin_location_values(locations or []) or [None]
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(kws) * len(location_values)))) as pool:
+        futs = [
+            pool.submit(_linkedin_guest_search, kw, 0, TPR_PAST_HOUR, None, location)
+            for kw in kws
+            for location in location_values
+        ]
         if len(kws) <= 4:
-            futs.extend(pool.submit(_linkedin_guest_search, kw, 10) for kw in kws)
+            futs.extend(
+                pool.submit(_linkedin_guest_search, kw, 10, TPR_PAST_HOUR, None, location)
+                for kw in kws
+                for location in location_values
+            )
         for fut in as_completed(futs):
             try:
                 jobs.extend(fut.result() or [])
@@ -1023,6 +1147,145 @@ def _skill_is_mentioned(text: str, skill: str, aliases: tuple[str, ...]) -> bool
     return False
 
 
+def _normalize_scan_skills(skills: Optional[list[str]]) -> list[str]:
+    """Normalize the user-entered live-scan skills and enforce the five-item limit."""
+    if isinstance(skills, str):
+        raw_values = re.split(r"[,;|]", skills)
+    else:
+        raw_values = skills or []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        value = re.sub(r"\s+", " ", str(raw or "")).strip()
+        if not value:
+            continue
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(value[:80])
+        if len(normalized) >= MAX_SCAN_SKILLS:
+            break
+    return normalized
+
+
+def _normalize_scan_locations(locations: Optional[list[str]]) -> list[str]:
+    """Return canonical IDs for the supported multi-select locations."""
+    if isinstance(locations, str):
+        raw_values = re.split(r"[,;|]", locations)
+    else:
+        raw_values = locations or []
+    by_key = {}
+    for option in LIVE_JOB_LOCATION_OPTIONS:
+        by_key[option["id"].casefold()] = option["id"]
+        by_key[option["label"].casefold()] = option["id"]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        key = str(raw or "").strip().casefold()
+        location_id = by_key.get(key)
+        if not location_id or location_id in seen:
+            continue
+        seen.add(location_id)
+        normalized.append(location_id)
+        if len(normalized) >= MAX_SCAN_LOCATIONS:
+            break
+    return normalized
+
+
+def _scan_skill_variants(skill: str) -> tuple[str, ...]:
+    """Build boundary-safe variants for a free-form skill filter."""
+    raw = re.sub(r"\s+", " ", str(skill or "")).strip()
+    if not raw:
+        return ()
+    canonical = _canonical_skill(raw)
+    variants = [raw, canonical]
+    variants.extend(SKILL_ALIASES.get(canonical, ()))
+    # Make combined entries such as ``AI/ML`` useful against ordinary listing
+    # text where the source says ``AI`` or ``machine learning`` instead.
+    if "/" in raw:
+        variants.extend(part.strip() for part in raw.split("/") if part.strip())
+    if raw.casefold() in {"ai/ml", "ai ml"}:
+        variants.extend(("artificial intelligence", "machine learning", "ml"))
+    out: list[str] = []
+    seen: set[str] = set()
+    for variant in variants:
+        value = str(variant or "").strip()
+        key = value.casefold()
+        if value and key not in seen:
+            seen.add(key)
+            out.append(value)
+    return tuple(out)
+
+
+def _job_matches_skill_filters(job: dict, skills: list[str]) -> bool:
+    if not skills:
+        return True
+    text = " ".join(str(job.get(key) or "") for key in ("title", "snippet", "description")).lower()
+    return any(
+        any(_skill_is_mentioned(text, variant, ()) for variant in _scan_skill_variants(skill))
+        for skill in skills
+    )
+
+
+def _job_matches_location_filters(job: dict, locations: list[str]) -> bool:
+    if not locations:
+        return True
+    # Location is populated directly for LinkedIn. Prefer it when present so
+    # an incidental country mention in a long description cannot make a job
+    # look location-matched. Naukri often exposes location only in its search
+    # snippet or fetched description, so those are the fallback fields.
+    explicit_location = str(job.get("location") or "").strip()
+    text = (
+        explicit_location
+        if explicit_location
+        else " ".join(str(job.get(key) or "") for key in ("snippet", "description"))
+    ).lower()
+    options = {option["id"]: option for option in LIVE_JOB_LOCATION_OPTIONS}
+    return any(
+        any(_skill_is_mentioned(text, alias, ()) for alias in options[location_id]["aliases"])
+        for location_id in locations
+        if location_id in options
+    )
+
+
+def _location_query_expression(locations: list[str]) -> str:
+    options = {option["id"]: option for option in LIVE_JOB_LOCATION_OPTIONS}
+    labels = [options[location_id]["query"] for location_id in locations if location_id in options]
+    if not labels:
+        return ""
+    return "(" + " OR ".join(f'"{label}"' for label in labels) + ")"
+
+
+def _linkedin_location_values(locations: list[str]) -> list[str]:
+    """Return structured LinkedIn location values instead of keyword text."""
+    options = {option["id"]: option for option in LIVE_JOB_LOCATION_OPTIONS}
+    values = []
+    seen: set[str] = set()
+    for location_id in locations:
+        option = options.get(location_id)
+        value = str(option.get("query") or "").strip() if option else ""
+        if value and value.casefold() not in seen:
+            seen.add(value.casefold())
+            values.append(value)
+    return values[:4]
+
+
+def _scan_search_terms(
+    bench: dict,
+    skills: list[str],
+    locations: list[str],
+) -> tuple[list[str], bool]:
+    """Choose the discovery terms for a live scan and add location context."""
+    resume_terms = search_queries_for_scan(bench)
+    from_resumes = bool(resume_terms) and not skills
+    base_terms = skills or resume_terms or list(DEFAULT_SEARCH_QUERIES)
+    # Location is passed to LinkedIn as its structured `location` parameter
+    # and added to Naukri's public-search query separately. Keeping it out of
+    # the keyword text prevents LinkedIn from returning a different country.
+    return base_terms[:8], from_resumes
+
+
 def _person_skills(person: dict) -> set[str]:
     raw_skills = person.get("skills") or []
     if isinstance(raw_skills, str):
@@ -1163,25 +1426,144 @@ def _match_evidence(job: dict, bench: dict) -> dict:
     }
 
 
+def _safe_stream_event(on_batch: Optional[Callable[[dict], None]], event: dict) -> None:
+    """Send a progress event without allowing a disconnected client to break a scan."""
+    if not on_batch:
+        return
+    try:
+        on_batch(event)
+    except Exception as exc:  # noqa: BLE001 - progress is best effort
+        print(f"[LiveJobs] progress event skipped ({type(exc).__name__})")
+
+
+def _emit_result_batches(
+    result: dict,
+    on_batch: Optional[Callable[[dict], None]],
+    *,
+    phase: str = "final",
+) -> None:
+    """Emit verified result rows in small, UI-friendly chunks.
+
+    The full result is still returned to synchronous callers.  Streaming callers
+    receive the exact same rows, only grouped into five-row batches.
+    """
+    if not on_batch:
+        return
+    jobs = list(result.get("jobs") or [])
+    if not jobs:
+        return
+    batch_count = (len(jobs) + STREAM_BATCH_SIZE - 1) // STREAM_BATCH_SIZE
+    summary = {key: value for key, value in result.items() if key not in {"jobs", "job"}}
+    for offset in range(0, len(jobs), STREAM_BATCH_SIZE):
+        batch = jobs[offset:offset + STREAM_BATCH_SIZE]
+        batch_index = offset // STREAM_BATCH_SIZE + 1
+        _safe_stream_event(on_batch, {
+            "type": "batch",
+            "phase": phase,
+            "batch_index": batch_index,
+            "batch_count": batch_count,
+            "received_jobs": min(offset + len(batch), len(jobs)),
+            "total_jobs": len(jobs),
+            "jobs": batch,
+            "summary": summary,
+        })
+
+
+def _preview_linkedin_jobs(
+    rows: list[dict],
+    bench: dict,
+    scan_skills: list[str],
+    scan_locations: list[str],
+    minutes: int,
+) -> list[dict]:
+    """Build an early batch from already timestamped LinkedIn guest results.
+
+    LinkedIn guest search is already restricted to the recent source window, so
+    these rows are safe to show while the slower Naukri/detail-page work is
+    still running.  The final scan remains authoritative and replaces the
+    preview when it completes.
+    """
+    preview: list[dict] = []
+    seen: set[str] = set()
+    for row in rows or []:
+        url = _clean_job_url(row.get("url") or "")
+        if not url or not _is_job_url(url) or _platform(url) != "LinkedIn":
+            continue
+        job_id = _job_id(url)
+        if job_id in seen:
+            continue
+        seen.add(job_id)
+        title = row.get("title") or ""
+        snippet = row.get("snippet") or ""
+        if _is_junk_listing(title, snippet):
+            continue
+        job = {
+            "id": job_id,
+            "title": title[:140],
+            "company": row.get("company") or "",
+            "location": row.get("location") or "",
+            "url": url,
+            "platform": "LinkedIn",
+            "track": row.get("track") or "software",
+            "snippet": snippet[:400],
+            "posted_minutes": row.get("posted_minutes"),
+            "first_seen_minutes": 0,
+            "recency": "pending_verify",
+            "emails": [],
+            "description": row.get("description") or snippet,
+            "source": "linkedin_guest",
+        }
+        age = job.get("posted_minutes")
+        if age is None:
+            age = FALLBACK_MINUTES
+            job["posted_minutes"] = age
+            job["date_confidence"] = "source_window_only"
+        else:
+            job["date_confidence"] = "listing_timestamp"
+        if in_posted_window(age, minutes):
+            job["recency"] = "posted_in_window"
+        elif in_posted_window(age, FALLBACK_MINUTES):
+            job["recency"] = "posted_in_fallback"
+        else:
+            continue
+        if scan_skills and not _job_matches_skill_filters(job, scan_skills):
+            continue
+        if scan_locations and not _job_matches_location_filters(job, scan_locations):
+            continue
+        _attach_talent(job, bench)
+        preview.append(job)
+    preview.sort(key=lambda job: job.get("posted_minutes") if job.get("posted_minutes") is not None else 99999)
+    return preview[:STREAM_BATCH_SIZE]
+
+
 def scan(
     minutes: int = WINDOW_MINUTES_DEFAULT,
     sources: Optional[list[str]] = None,
     include_unverified_recent: bool = False,
+    skills: Optional[list[str]] = None,
+    locations: Optional[list[str]] = None,
+    on_batch: Optional[Callable[[dict], None]] = None,
 ) -> dict:
     started_at = time.monotonic()
     minutes = max(5, min(int(minutes or WINDOW_MINUTES_DEFAULT), 180))
     src = [s.lower().strip() for s in (sources or ["linkedin", "naukri"]) if s]
     src = [s for s in src if s in ("linkedin", "naukri")] or ["linkedin", "naukri"]
     bench = get_bench()
-    resume_terms = search_queries_for_scan(bench)
-    from_resumes = bool(resume_terms)
-    search_terms = resume_terms or list(DEFAULT_SEARCH_QUERIES)
+    scan_skills = _normalize_scan_skills(skills)
+    scan_locations = _normalize_scan_locations(locations)
+    search_terms, from_resumes = _scan_search_terms(bench, scan_skills, scan_locations)
 
-    queries = _queries(src, search_terms)
+    queries = _queries(src, search_terms, scan_locations)
     errors: list[str] = []
     now = _now()
     jobs_map: dict[str, dict] = {}
-    dropped = {"junk": 0, "not_role": 0, "stale_or_unknown": 0}
+    dropped = {
+        "junk": 0,
+        "not_role": 0,
+        "stale_or_unknown": 0,
+        "skill_filter": 0,
+        "location_filter": 0,
+    }
     source_diagnostics: dict[str, dict[str, Any]] = {
         source: {
             "queries_attempted": 0,
@@ -1195,6 +1577,8 @@ def scan(
             "within_fallback_window": 0,
             "date_unverified": 0,
             "outside_fallback_window": 0,
+            "filtered_by_skill": 0,
+            "filtered_by_location": 0,
             "search_providers": {},
         }
         for source in src
@@ -1208,16 +1592,46 @@ def scan(
         linkedin_future = None
         naukri_future = None
         if "linkedin" in src:
+            linkedin_location_count = max(1, len(_linkedin_location_values(scan_locations)))
+            linkedin_page_count = 2 if len(search_terms) <= 4 else 1
             source_diagnostics["linkedin"]["queries_attempted"] = min(
-                len(search_terms) * (2 if len(search_terms) <= 4 else 1), 8
+                len(search_terms) * linkedin_location_count * linkedin_page_count,
+                32,
             )
-            linkedin_future = provider_pool.submit(_collect_linkedin_live, search_terms)
+            linkedin_future = provider_pool.submit(_collect_linkedin_live, search_terms, scan_locations)
         if "naukri" in src:
             source_diagnostics["naukri"]["queries_attempted"] = len(queries)
             naukri_future = provider_pool.submit(_collect_naukri_hits, queries)
         if linkedin_future:
             try:
                 linkedin_rows = linkedin_future.result() or []
+                if on_batch and linkedin_rows:
+                    preview_jobs = _preview_linkedin_jobs(
+                        linkedin_rows,
+                        bench,
+                        scan_skills,
+                        scan_locations,
+                        minutes,
+                    )
+                    if preview_jobs:
+                        _safe_stream_event(on_batch, {
+                            "type": "batch",
+                            "phase": "early",
+                            "batch_index": 1,
+                            "batch_count": None,
+                            "received_jobs": len(preview_jobs),
+                            "total_jobs": None,
+                            "jobs": preview_jobs,
+                            "summary": {
+                                "filters": {
+                                    "skills": scan_skills,
+                                    "locations": scan_locations,
+                                },
+                                "_meta": {
+                                    "note": "Early verified LinkedIn results are shown while the remaining public sources are checked.",
+                                },
+                            },
+                        })
             except Exception as exc:
                 errors.append(f"LinkedIn search failed: {type(exc).__name__}")
         if naukri_future:
@@ -1248,6 +1662,7 @@ def scan(
                 "id": jid,
                 "title": title[:140],
                 "company": row.get("company") or "",
+                "location": row.get("location") or "",
                 "url": url,
                 "platform": "LinkedIn",
                 "track": row.get("track") or "software",
@@ -1284,6 +1699,7 @@ def scan(
                 "id": jid,
                 "title": (role or title_raw)[:140],
                 "company": company,
+                "location": h.get("location") or "",
                 "url": url,
                 "platform": "Naukri",
                 "track": track,
@@ -1330,6 +1746,19 @@ def scan(
     jobs_fallback = []
     jobs_unverified = []
     for job in candidates:
+        stats = source_diagnostics.get(str(job.get("platform") or "").lower())
+        if stats is None:
+            stats = source_diagnostics.get("linkedin" if job.get("platform") == "LinkedIn" else "naukri")
+        if scan_skills and not _job_matches_skill_filters(job, scan_skills):
+            dropped["skill_filter"] += 1
+            if stats is not None:
+                stats["filtered_by_skill"] += 1
+            continue
+        if scan_locations and not _job_matches_location_filters(job, scan_locations):
+            dropped["location_filter"] += 1
+            if stats is not None:
+                stats["filtered_by_location"] += 1
+            continue
         age = job.get("posted_minutes")
         if age is None and job.get("platform") == "LinkedIn":
             # LinkedIn guest search is already f_TPR=r3600 (past hour).
@@ -1351,9 +1780,6 @@ def scan(
         else:
             dropped["stale_or_unknown"] += 1
 
-        stats = source_diagnostics.get(str(job.get("platform") or "").lower())
-        if stats is None:
-            stats = source_diagnostics.get("linkedin" if job.get("platform") == "LinkedIn" else "naukri")
         if stats is not None:
             if age is None:
                 stats["date_unverified"] += 1
@@ -1410,9 +1836,18 @@ def scan(
         job["matched_talent"] = evidence["candidate"]
 
     qnote = " Searched: " + ", ".join(search_terms[:8]) + "."
+    if scan_skills:
+        qnote += " User skill filter: " + ", ".join(scan_skills) + "."
+    if scan_locations:
+        location_labels = {
+            option["id"]: option["label"] for option in LIVE_JOB_LOCATION_OPTIONS
+        }
+        qnote += " Location filter: " + ", ".join(
+            location_labels[location_id] for location_id in scan_locations
+        ) + "."
     if from_resumes:
         qnote += " Queries came from uploaded resume skills."
-    else:
+    elif not scan_skills:
         qnote += " No resumes on the bench, so this used the default live AI/software search. Upload resumes to search by their skills."
     if fallback_used and jobs_primary:
         note = (
@@ -1430,6 +1865,8 @@ def scan(
         note = (
             f"No matching jobs could be proven within {minutes} minutes or the {fallback}-minute fallback."
         )
+    if scan_skills or scan_locations:
+        note += " Results were restricted to the selected live-scan filters."
     if jobs_unverified and not include_unverified_recent:
         note += f" {len(jobs_unverified)} Naukri listing(s) had no verifiable posting date and were omitted."
     elif include_unverified_recent and any(j.get("recency") == "date_unverified" for j in jobs):
@@ -1438,7 +1875,7 @@ def scan(
         shown = source_diagnostics["naukri"]["displayed_jobs"]
         note += f" Naukri target is {NAUKRI_SCAN_TARGET_MIN}–{NAUKRI_SCAN_TARGET_MAX}; this search found only {shown} usable listing(s), so none were fabricated."
     note = f"{note}{qnote} {NAUKRI_BLOCKED_NOTE}"
-    return {
+    result = {
         "window_minutes": applied,
         "window_requested": minutes,
         "window_fallback": fallback,
@@ -1455,6 +1892,10 @@ def scan(
         "source_diagnostics": source_diagnostics,
         "bench_loaded": sum(1 for p in (bench.get("people") or {}).values() if p.get("loaded")),
         "search_queries": search_terms,
+        "filters": {
+            "skills": scan_skills,
+            "locations": scan_locations,
+        },
         "jobs": jobs,
         "errors": errors,
         "_meta": {
@@ -1462,6 +1903,8 @@ def scan(
             "auto_send": False,
         },
     }
+    _emit_result_batches(result, on_batch)
+    return result
 
 
 def _attach_talent(job: dict, bench: Optional[dict] = None) -> dict:
@@ -1770,7 +2213,11 @@ def _ingest_payload(
     }
 
 
-def ingest_url(url: str, days: int = URL_DISCOVER_DAYS) -> dict:
+def ingest_url(
+    url: str,
+    days: int = URL_DISCOVER_DAYS,
+    on_batch: Optional[Callable[[dict], None]] = None,
+) -> dict:
     url = _normalize_http_url(url)
     if not url:
         raise ValueError("Paste a LinkedIn company page, job post, Naukri/Greenhouse board, or company website.")
@@ -1791,10 +2238,12 @@ def ingest_url(url: str, days: int = URL_DISCOVER_DAYS) -> dict:
             note += f" Posting date is older than {days} days."
         if job.get("recency") == "date_unverified":
             note += " Posting date could not be verified; this job is not counted as in-window."
-        return _ingest_payload(
+        result = _ingest_payload(
             "job", [job], url=url, company=job.get("company") or "", note=note, days=days,
             source_diagnostics={"naukri": {"direct_job_url": 1, "date_unverified": int(age is None)}},
         )
+        _emit_result_batches(result, on_batch)
+        return result
 
     info = _classify_source_url(url)
     company = info.get("company") or ""
@@ -1875,10 +2324,12 @@ def ingest_url(url: str, days: int = URL_DISCOVER_DAYS) -> dict:
         )
     if not jobs:
         note += " Nothing proven in that window — the company may have no dated public posts right now."
-    return _ingest_payload(
+    result = _ingest_payload(
         kind, jobs, url=url, company=company, note=note, days=days,
         source_diagnostics=source_stats or {kind: ingest_stats},
     )
+    _emit_result_batches(result, on_batch)
+    return result
 
 
 def _ingest_single_job(url: str) -> dict:

@@ -16,7 +16,7 @@ export default function Topbar({ theme, onToggleTheme, onOpenMenu }) {
       </button>
 
       <div className="topbar__crumbs">
-        <span>Casefile</span>
+        <span>CompareFlow.ai</span>
         <span aria-hidden="true">/</span>
         <strong className="truncate">{page ? (page.exhibit ? `Exhibit ${page.exhibit} — ${page.title}` : page.title) : 'Not found'}</strong>
       </div>

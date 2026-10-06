@@ -15,6 +15,9 @@ export function bestPoc(report) {
       phone: supplied.phone || '',
       company: supplied.company || '',
       reason: supplied.reason || '',
+      confidence: supplied.confidence || '',
+      source: supplied.source || '',
+      source_urls: supplied.source_urls || [],
     };
   }
   const co = report.company_profile || {};
@@ -71,7 +74,7 @@ export function bestPoc(report) {
     }
   }
 
-  return { name, title, email, phone, company, reason: '' };
+  return { name, title, email, phone, company, reason: '', confidence: '', source: '', source_urls: [] };
 }
 
 // Everything the Target page needs, derived once from the raw research report.

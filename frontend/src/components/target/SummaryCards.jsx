@@ -61,6 +61,9 @@ export default function SummaryCards({ view }) {
             {hasData(poc.email) && <div className="mini-card__meta">{poc.email}</div>}
             {hasData(poc.phone) && <div className="mini-card__meta">{poc.phone}</div>}
             {poc.reason && <div className="mini-card__meta">{poc.reason}</div>}
+            {(poc.source || poc.confidence) && (
+              <div className="mini-card__meta">{[poc.source, poc.confidence].filter(Boolean).join(' · ')}</div>
+            )}
           </>
         ) : (
           <span className="field-value muted">No current operating contact verified on public sources</span>

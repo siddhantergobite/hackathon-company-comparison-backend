@@ -10,18 +10,22 @@ const EMPTY = { brochure: null, target: null, pitch: null, aeo: null, outreachLo
 
 function loadSession() {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    return raw ? { ...EMPTY, ...JSON.parse(raw) } : EMPTY;
+    // A browser refresh starts a new casefile. Do not restore old brochure,
+    // target, pitch, or outreach data into a fresh screen.
+    sessionStorage.removeItem(STORAGE_KEY);
   } catch {
-    return EMPTY;
+    /* storage can be disabled; the in-memory casefile still starts empty */
   }
+  return EMPTY;
 }
 
-function saveSession(data) {
+function saveSession() {
   try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    // Keep route navigation state in React only; a hard refresh must not
+    // resurrect information from the previous screen/session.
+    sessionStorage.removeItem(STORAGE_KEY);
   } catch {
-    /* quota exceeded or storage blocked — the session simply isn't restored on reload */
+    /* storage can be disabled */
   }
 }
 
@@ -33,10 +37,11 @@ export function CasefileProvider({ children }) {
   const [requests, setRequests] = useState({});
   const dataRef = useRef(data);
   const inFlight = useRef(new Set());
+  const targetRequestId = useRef(0);
 
   useEffect(() => {
     dataRef.current = data;
-    saveSession(data);
+    saveSession();
   }, [data]);
 
   const setSlice = useCallback((key, value) => setData((d) => ({ ...d, [key]: value })), []);
@@ -70,8 +75,20 @@ export function CasefileProvider({ children }) {
       uploadBrochure: (file) =>
         track('brochure', async () => setSlice('brochure', await api.brochureUpload(file))),
 
-      researchTarget: (url) =>
-        track('target', async () => setSlice('target', await api.companyResearch(url))),
+      researchTarget: (url) => {
+        const requestId = ++targetRequestId.current;
+
+        // A new target invalidates every target-dependent result immediately.
+        // This prevents an old report/draft from being shown while the new
+        // research is running or after the new request fails.
+        setData((d) => ({ ...d, target: null, pitch: null, aeo: null, outreachLog: [] }));
+
+        return track('target', async () => {
+          const report = await api.companyResearch(url);
+          if (requestId !== targetRequestId.current) return;
+          setSlice('target', report);
+        });
+      },
 
       generatePitch: () =>
         track('pitch', async () => {
@@ -89,16 +106,19 @@ export function CasefileProvider({ children }) {
           const slug = String(getTargetName(target)).toLowerCase().replace(/[^a-z0-9]+/g, '-');
           const link = document.createElement('a');
           link.href = URL.createObjectURL(blob);
-          link.download = filename || `casefile-${slug}.pdf`;
+          link.download = filename || `compareflow-ai-${slug}.pdf`;
           link.click();
           URL.revokeObjectURL(link.href);
-          toast.success('Casefile PDF downloaded.');
+          toast.success('CompareFlow.ai PDF downloaded.');
         }),
 
       logOutreach: (entry) =>
         setData((d) => ({ ...d, outreachLog: [entry, ...d.outreachLog] })),
 
-      resetCasefile: () => setData(EMPTY),
+      resetCasefile: () => {
+        targetRequestId.current += 1;
+        setData(EMPTY);
+      },
     }),
     [track, setSlice, toast],
   );

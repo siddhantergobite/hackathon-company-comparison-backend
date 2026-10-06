@@ -154,7 +154,7 @@ export default function NewsDetail() {
         <aside className="nw-detail__aside">
           <Card as="section" aria-label="Original article">
             <div className="field-label">Original article</div>
-            <p className="text-sm" style={{ margin: '4px 0 14px' }}>Read the full story on <strong>{a.source?.name}</strong>. Casefile shows a summary and links to the publisher.</p>
+            <p className="text-sm" style={{ margin: '4px 0 14px' }}>Read the full story on <strong>{a.source?.name}</strong>. CompareFlow.ai shows a summary and links to the publisher.</p>
             {original ? (
               <a className="btn btn--primary btn--lg" href={original} target="_blank" rel="noopener noreferrer" style={{ width: '100%' }}>
                 Read Original Article <ExternalLink size={16} aria-hidden="true" />

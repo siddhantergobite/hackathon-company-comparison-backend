@@ -15,13 +15,16 @@ except Exception:  # noqa: BLE001 - optional; falls back to the bundled CA list
     pass
 
 from contextlib import AsyncExitStack, asynccontextmanager
+import asyncio
+import json
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, Response, JSONResponse
+from fastapi.responses import RedirectResponse, Response, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -62,7 +65,7 @@ async def _lifespan(app):
         yield
 
 app = FastAPI(
-    title="Company Intelligence Casefile",
+    title="CompareFlow.ai — Company Intelligence",
     version="3.0.0",
     description="Brochure intake, target research, pitch, PDF export, AEO/GEO audit, the Event Hub and News Intelligence.",
     lifespan=_lifespan,
@@ -98,8 +101,9 @@ def health():
     return {
         "status": "ok",
         "version": "3.0.0",
-        "product": "company-comparison-casefile",
+        "product": "compareflow-ai-company-intelligence",
         "llm": st.get("active_model"),
+        "company_research_judge_required": not company_research.RESEARCH_SKIP_JUDGE,
         **st,
     }
 
@@ -132,12 +136,31 @@ class CompanyResearchRequest(BaseModel):
     url: str
 
 
+# Research fans out into several blocking HTTP/model calls of its own.  Keep
+# the server responsive when a user double-clicks Research or opens multiple
+# browser tabs; excess research requests wait in this small queue instead of
+# saturating the process with nested worker pools.
+_research_slots = asyncio.Semaphore(2)
+
+
 @app.post("/api/company-research")
 async def api_company_research(req: CompanyResearchRequest):
     """Full target-company intelligence report from a public website URL."""
     try:
-        result = company_research.run(req.url)
-        return JSONResponse(content=result)
+        # The research pipeline performs blocking HTTP and model calls.  Keep
+        # it off the event loop so /health, UI assets, and other requests stay
+        # responsive while a long company lookup is running.
+        async with _research_slots:
+            result = await run_in_threadpool(company_research.run, req.url)
+        return JSONResponse(
+            content=result,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -177,11 +200,62 @@ class LiveJobsScanRequest(BaseModel):
     minutes: int = 30
     sources: Optional[list[str]] = None
     include_unverified_recent: bool = True
+    skills: Optional[list[str]] = None
+    locations: Optional[list[str]] = None
 
 
 class LiveJobUrlRequest(BaseModel):
     url: str
     days: Optional[int] = 14
+
+
+async def _stream_live_jobs(worker):
+    """Run a blocking live-job search and forward five-row NDJSON batches."""
+    loop = asyncio.get_running_loop()
+    events = asyncio.Queue()
+    stopped = False
+    sentinel = object()
+
+    def push(event):
+        if stopped:
+            return
+        try:
+            loop.call_soon_threadsafe(events.put_nowait, event)
+        except RuntimeError:
+            # The browser may close the tab while the public scan is finishing.
+            pass
+
+    def run_worker():
+        try:
+            result = worker(push)
+            push({"type": "complete", "result": result})
+        except ValueError as exc:
+            push({"type": "error", "status": 400, "detail": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - the stream reports a safe error event
+            push({"type": "error", "status": 500, "detail": str(exc)})
+        finally:
+            push(sentinel)
+
+    task = asyncio.create_task(asyncio.to_thread(run_worker))
+    try:
+        while True:
+            event = await events.get()
+            if event is sentinel:
+                break
+            yield json.dumps(event, ensure_ascii=False, default=str) + "\n"
+            # A short pause makes the UI visibly progressive when several
+            # batches are already available, while the first batch is sent as
+            # soon as the worker publishes it.
+            if (
+                event.get("type") == "batch"
+                and event.get("phase") == "final"
+                and event.get("batch_index", 0) < event.get("batch_count", 0)
+            ):
+                await asyncio.sleep(2.2)
+    finally:
+        stopped = True
+        if not task.done():
+            task.cancel()
 
 
 @app.get("/api/talent-bench")
@@ -219,9 +293,27 @@ def api_live_jobs_scan(req: LiveJobsScanRequest):
             minutes=req.minutes,
             sources=req.sources,
             include_unverified_recent=req.include_unverified_recent,
+            skills=req.skills,
+            locations=req.locations,
         ))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/live-jobs/scan/stream")
+async def api_live_jobs_scan_stream(req: LiveJobsScanRequest):
+    return StreamingResponse(
+        _stream_live_jobs(lambda publish: live_jobs.scan(
+            minutes=req.minutes,
+            sources=req.sources,
+            include_unverified_recent=req.include_unverified_recent,
+            skills=req.skills,
+            locations=req.locations,
+            on_batch=publish,
+        )),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/live-jobs/ingest")
@@ -232,6 +324,19 @@ def api_live_jobs_ingest(req: LiveJobUrlRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/live-jobs/ingest/stream")
+async def api_live_jobs_ingest_stream(req: LiveJobUrlRequest):
+    return StreamingResponse(
+        _stream_live_jobs(lambda publish: live_jobs.ingest_url(
+            req.url,
+            days=req.days or 14,
+            on_batch=publish,
+        )),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Brochure / pitch / PDF (Exhibits A, C, E) ────────────────────────────────

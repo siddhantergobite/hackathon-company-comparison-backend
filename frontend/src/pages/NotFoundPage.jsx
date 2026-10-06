@@ -9,7 +9,7 @@ export default function NotFoundPage() {
         title="Page not found"
         action={<LinkButton to="/brochure">Back to Exhibit A</LinkButton>}
       >
-        That page doesn't exist in this casefile.
+        That page doesn't exist in this report.
       </EmptyState>
     </div>
   );

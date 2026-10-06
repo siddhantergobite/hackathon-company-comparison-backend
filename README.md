@@ -54,7 +54,7 @@ LIVE_JOBS_SERPAPI_KEY=     # optional Live Jobs search; blank uses DuckDuckGo
 RESEARCH_USE_GROQ=0
 
 # Fast research is the default (~40–70 s for most public companies).
-# Set RESEARCH_DEEP=1 only for the old multi-minute DuckDuckGo + extra LLM-judge sweep.
+# Set RESEARCH_DEEP=1 only for the old multi-minute DuckDuckGo discovery sweep.
 RESEARCH_DEEP=0
 ```
 
@@ -213,7 +213,7 @@ The `--reload` server restarts itself on `.py` changes but **not** on `.env` cha
 | E — Download PDF | `/casefile/export` | Full casefile export |
 | F — AEO / GEO | `/casefile/aeo-geo` | Answer-engine & generative-engine visibility audit |
 
-Your progress (brochure, target, pitch, audit, outreach log) is kept for the browser session, so a page refresh doesn't lose a long research run.
+Your progress (brochure, target, pitch, audit, outreach log) stays available while navigating inside the app. A full browser refresh starts a clean casefile so old company information is not silently restored.
 
 > **Outreach (D) does not send email.** *Send email* only records the message in the outreach log ("demo, no mail server configured"). Connect a mail provider (SMTP, SendGrid, Gmail API) before relying on it.
 >
@@ -239,6 +239,16 @@ If a current officer or a financial figure cannot be verified, the field stays *
 
 Typical latency: **~40–70 seconds** on the default path. The hiring, leadership and evidence lookups run in the background while the main LLM call is in flight, and all contact-page candidates are fetched in one wave. `RESEARCH_DEEP=1` restores the slower extra web sweep.
 
+### Public point-of-contact fallback
+
+When the official site has no named contact and no judged current executive, the app makes one bounded public-web/model-knowledge lookup. A separate contact judge then checks the candidate against the exact company domain and supplied public evidence before it can reach the report. Email addresses and phone numbers must appear literally in public evidence; they are never generated from a name. ChatGPT/OpenAI pages, private or confidential details, parked domains, and rejected candidates are never shown or cited. If the judge cannot verify the candidate, the UI says that no current public contact was verified.
+
+The final contact decision is cached briefly so repeated Research clicks do not repeat the same fallback search. Research runs in a worker thread with a small concurrency limit, keeping `/health` and the UI responsive while a long lookup is running. Unreachable, invalid, or parked domains return a controlled `422` instead of a synthetic company profile.
+
+### Live job result streaming
+
+Live Jobs returns up to 20 real public listings in five-row NDJSON batches. The first verified LinkedIn batch can appear while the remaining public-source checks continue; final batches arrive about 2 seconds apart and the completed response remains authoritative. Selected countries are sent to LinkedIn through its structured location parameter and then checked again against each card's location; they are not treated as a loose keyword. The UI merges batches by job URL, so a listing is never duplicated. If fewer than 20 listings survive date, source, and relevance checks, the app shows the smaller exact count rather than padding it with stale or invented jobs.
+
 ---
 
 ## API
@@ -252,6 +262,8 @@ Typical latency: **~40–70 seconds** on the default path. The hiring, leadershi
 | POST | `/api/brochure-search` | Company name → profile |
 | POST | `/api/company-research` | `{ "url": "..." }` → target report |
 | POST | `/api/aeo-geo-audit` | `{ "url": "..." }` → AEO/GEO audit |
+| POST | `/api/live-jobs/scan/stream` | Live scan → five-row NDJSON batches + final result |
+| POST | `/api/live-jobs/ingest/stream` | Company/job URL discovery → five-row NDJSON batches + final result |
 | POST | `/api/generate-pitch` | Brochure + target → pitch |
 | POST | `/api/export-pdf` | Brochure + target + pitch → PDF |
 | GET | `/docs` | Interactive OpenAPI docs for every route |
@@ -270,7 +282,7 @@ The Event Hub (`/api/events`, `/api/admin`) and News (`/api/news`, `/api/admin/n
 │       ├── company_research.py      # Exhibit B pipeline
 │       ├── wikidata.py              # Domain-matched officers / HQ / revenue
 │       ├── research_authenticity.py # Hiring, POC, revenue, honest scores
-│       ├── llm_judge.py             # Extra LLM-as-judge (deep mode)
+│       ├── llm_judge.py             # Mandatory final LLM-as-judge gate
 │       ├── aeo_geo.py
 │       ├── pitch_generator.py
 │       ├── pdf_export.py

@@ -1,5 +1,5 @@
 """
-Casefile PDF — branded intelligence report matching the UI.
+CompareFlow.ai PDF — branded intelligence report matching the UI.
 
 Exhibits: A brochure · B target · C pitch · D outreach · F AEO/GEO (if run)
 """
@@ -153,7 +153,7 @@ def _slug(name: str) -> str:
 def filename_for(brochure: dict, target: dict) -> str:
     meta = target.get("_meta") or {}
     target_name = meta.get("company_name") or (target.get("company_profile") or {}).get("name") or "target"
-    return f"casefile-{_slug(str(target_name))}.pdf"
+    return f"compareflow-ai-{_slug(str(target_name))}.pdf"
 
 
 def _styles() -> dict[str, ParagraphStyle]:
@@ -498,7 +498,7 @@ def _draw_cover_chrome(c, ctx: dict) -> None:
 
     c.setFillColor(CREAM)
     c.setFont("Times-Bold", 18)
-    c.drawString(1.12 * inch, PAGE_H - 0.72 * inch, "Casefile")
+    c.drawString(1.12 * inch, PAGE_H - 0.72 * inch, "CompareFlow.ai")
     c.setFillColor(colors.HexColor("#B8B0A0"))
     c.setFont("Courier", 8)
     c.drawString(1.12 * inch, PAGE_H - 0.94 * inch, "CLIENT INTELLIGENCE  ·  OUTREACH")
@@ -514,7 +514,7 @@ def _draw_cover_chrome(c, ctx: dict) -> None:
     c.rect(0, 0, PAGE_W, 0.42 * inch, fill=1, stroke=0)
     c.setFillColor(MUTED)
     c.setFont("Courier", 7)
-    c.drawString(LEFT, 0.18 * inch, "Casefile  ·  not for public distribution")
+    c.drawString(LEFT, 0.18 * inch, "CompareFlow.ai  ·  not for public distribution")
     c.drawRightString(PAGE_W - RIGHT, 0.18 * inch, "Exhibit pack A–F")
 
 
@@ -533,7 +533,7 @@ def _draw_body_chrome(c, doc, ctx: dict) -> None:
     c.drawString(LEFT, PAGE_H - 0.30 * inch, "CF")
     c.setFillColor(CREAM)
     c.setFont("Times-Bold", 10)
-    c.drawString(LEFT + 0.28 * inch, PAGE_H - 0.31 * inch, "Casefile")
+    c.drawString(LEFT + 0.28 * inch, PAGE_H - 0.31 * inch, "CompareFlow.ai")
     pair = f"{_latin(ctx.get('pitcher', ''))}  |  {_latin(ctx.get('target', ''))}"
     c.setFont("Helvetica", 8)
     c.setFillColor(colors.HexColor("#C9C2B4"))
@@ -546,7 +546,7 @@ def _draw_body_chrome(c, doc, ctx: dict) -> None:
     c.line(LEFT, 0.46 * inch, PAGE_W - RIGHT, 0.46 * inch)
     c.setFillColor(MUTED)
     c.setFont("Courier", 7)
-    c.drawString(LEFT, 0.20 * inch, "Confidential  ·  Casefile intelligence report")
+    c.drawString(LEFT, 0.20 * inch, "Confidential  ·  CompareFlow.ai intelligence report")
     c.drawRightString(PAGE_W - RIGHT, 0.20 * inch, f"Page  {doc.page}")
 
 
@@ -560,7 +560,7 @@ def _cover_story(brochure, target, pitch, aeo, S, ctx) -> list:
     hq = _val(co.get("headquarters"))
 
     story = []
-    story.append(_P("INTELLIGENCE CASEFILE", S["kicker"]))
+    story.append(_P("INTELLIGENCE REPORT", S["kicker"]))
     story.append(_P(_esc(target_name), S["cover_title"]))
     story.append(_P(
         f"{_esc(pitcher)}  pitching  ·  generated { _esc(ctx['generated']) }",
@@ -1253,8 +1253,8 @@ def run(
     doc = BaseDocTemplate(
         buf,
         pagesize=A4,
-        title=f"Casefile - {pitcher} -> {target_name}",
-        author="Casefile",
+        title=f"CompareFlow.ai - {pitcher} -> {target_name}",
+        author="CompareFlow.ai",
     )
 
     cover_frame = Frame(

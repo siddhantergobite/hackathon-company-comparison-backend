@@ -1,10 +1,11 @@
-import { Mail, MapPin, Phone } from 'lucide-react';
+import { Mail, MapPin, Phone, UserRound } from 'lucide-react';
 import { CiteBadge } from '../../ui';
 import { asArray, hasData, val } from '../../../utils/data';
 
 export default function ContactsPanel({ report }) {
   const co = report.company_profile || {};
   const ci = report.contact_intelligence || {};
+  const poc = report.point_of_contact || {};
   const address = ci.registered_address || val(co.registered_address);
   const phones = asArray(ci.phones).filter((p) => p && p.number);
   const emails = asArray(ci.emails).filter((e) => e && e.email);
@@ -12,12 +13,29 @@ export default function ContactsPanel({ report }) {
     .map((a) => (typeof a === 'string' ? a : a?.address || a?.value || ''))
     .filter(hasData);
 
-  if (!hasData(address) && !phones.length && !emails.length && !offices.length) {
+  const hasPoc = hasData(poc.name) || hasData(poc.email) || hasData(poc.phone);
+
+  if (!hasPoc && !hasData(address) && !phones.length && !emails.length && !offices.length) {
     return <p className="field-value muted">No contacts found on public sources</p>;
   }
 
   return (
     <>
+      {hasPoc && (
+        <div className="contact-block">
+          <strong>
+            <UserRound size={15} style={{ verticalAlign: '-2px', marginRight: 6 }} aria-hidden="true" />
+            Public point of contact
+          </strong>
+          <div style={{ marginTop: 4 }}>
+            {poc.name && <div><strong>{poc.name}</strong>{poc.title ? ` · ${poc.title}` : ''}</div>}
+            {hasData(poc.email) && <div>{poc.email}</div>}
+            {hasData(poc.phone) && <div>{poc.phone}</div>}
+            {poc.reason && <div className="mini-card__meta">{poc.reason}</div>}
+            <CiteBadge field={poc} />
+          </div>
+        </div>
+      )}
       {hasData(address) && (
         <div className="contact-block">
           <strong>

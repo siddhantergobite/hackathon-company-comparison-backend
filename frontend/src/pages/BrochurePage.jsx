@@ -27,7 +27,7 @@ export default function BrochurePage() {
         exhibit="A"
         eyebrow="Your company"
         title="Brochure intake & extraction"
-        description="Upload a brochure, or search a company name to pull one automatically. The model reads it in full and stores every field for reuse in the rest of the casefile."
+        description="Upload a brochure, or search a company name to pull one automatically. The model reads it in full and stores every field for reuse in the rest of the report."
       />
 
       <div className="grid-2">

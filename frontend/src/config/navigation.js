@@ -38,7 +38,7 @@ export const WORKFLOW = [
     path: '/export',
     exhibit: 'E',
     title: 'Download PDF',
-    hint: 'Full casefile export',
+    hint: 'Full CompareFlow.ai report',
     icon: Download,
     isDone: () => false,
   },

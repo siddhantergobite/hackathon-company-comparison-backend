@@ -31,12 +31,12 @@ export default function ExportPage() {
   const { loading, error } = requests.pdf || {};
   const ready = Boolean(brochure && target);
 
-  const title = ready ? `${brochure.company_name || 'Your company'} → ${getTargetName(target)}` : 'Casefile report';
+  const title = ready ? `${brochure.company_name || 'Your company'} → ${getTargetName(target)}` : 'CompareFlow.ai report';
   const parts = ['brochure', 'target intel'];
   if (pitch) parts.push('pitch match', 'outreach draft');
   if (aeo) parts.push('AEO/GEO audit');
   const subtitle = ready
-    ? `Branded Casefile PDF — ${parts.join(', ')}.`
+    ? `Branded CompareFlow.ai PDF — ${parts.join(', ')}.`
     : 'Complete Exhibits A & B, then download.';
 
   return (
@@ -44,7 +44,7 @@ export default function ExportPage() {
       <PageHeader
         exhibit="E"
         eyebrow="Export"
-        title="Download full casefile"
+        title="Download full CompareFlow.ai report"
         description="Export a branded report: cover, KPIs, leadership, hiring, SWOT, pitch match, outreach draft and sources — plus the AEO/GEO audit if you ran Exhibit F."
       />
 

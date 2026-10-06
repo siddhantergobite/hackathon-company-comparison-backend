@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useState } from 'react';
-import { Briefcase, ExternalLink, Link2, Plus, Radar, Trash2, Upload } from 'lucide-react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { Briefcase, ChevronDown, ExternalLink, Link2, Plus, Radar, Trash2, Upload } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import { api } from '../api/client';
+import TagInput from '../components/ui/TagInput';
 import {
   Banner,
   Button,
@@ -26,6 +27,21 @@ const URL_STEPS = [
   'Collecting public LinkedIn, Naukri, and supported career-board listings',
   'Keeping only posts with a verifiable date',
   'Matching the talent bench',
+];
+
+const MAX_LIVE_SCAN_SKILLS = 5;
+const STREAM_BATCH_SIZE = 5;
+const LIVE_JOB_LOCATIONS = [
+  { id: 'india', label: 'India' },
+  { id: 'uk', label: 'UK' },
+  { id: 'usa', label: 'USA' },
+  { id: 'dubai', label: 'Dubai' },
+  { id: 'uae', label: 'UAE' },
+  { id: 'singapore', label: 'Singapore' },
+  { id: 'canada', label: 'Canada' },
+  { id: 'australia', label: 'Australia' },
+  { id: 'germany', label: 'Germany' },
+  { id: 'netherlands', label: 'Netherlands' },
 ];
 
 function recencyLabel(job) {
@@ -56,6 +72,33 @@ function asJobList(data) {
   return [];
 }
 
+function mergeJobRows(existing, incoming) {
+  const rows = new Map();
+  [...(existing || []), ...(incoming || [])].forEach((job) => {
+    if (!job?.url) return;
+    rows.set(job.id || job.url, job);
+  });
+  return Array.from(rows.values());
+}
+
+function normalizeIngestResult(data, peopleCount) {
+  const list = asJobList(data);
+  return {
+    ...(data || {}),
+    jobs: list,
+    job_count: data?.job_count ?? list.length,
+    in_window_count: data?.in_window_count ?? list.length,
+    verified_job_count: data?.verified_job_count ?? data?.in_window_count ?? list.length,
+    unverified_job_count: data?.unverified_job_count ?? list.filter((job) => job.recency === 'date_unverified').length,
+    window_minutes: data?.window_minutes || (data?.window_days ? data.window_days * 24 * 60 : 30),
+    window_days: data?.window_days || 14,
+    fallback_used: false,
+    bench_loaded: peopleCount,
+    scanned_at: data?.scanned_at || new Date().toISOString(),
+    _meta: data?._meta || { note: 'Jobs from the pasted URL (last 2 weeks, dated posts only).' },
+  };
+}
+
 function externalBoardSearchUrl(board, query) {
   const domains = {
     Indeed: 'indeed.com',
@@ -84,6 +127,11 @@ export default function LiveJobsPage() {
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [loadingIngest, setLoadingIngest] = useState(false);
+  const [liveScanSkills, setLiveScanSkills] = useState([]);
+  const [liveScanLocations, setLiveScanLocations] = useState([]);
+  const [streamProgress, setStreamProgress] = useState({ received: 0, total: null, batch: 0, phase: '' });
+  const streamAbortRef = useRef(null);
+  const streamRunIdRef = useRef(0);
 
   const jobs = scan?.jobs || [];
   const verifiedJobs = jobs.filter((job) => job.recency !== 'date_unverified');
@@ -106,6 +154,8 @@ export default function LiveJobsPage() {
   useEffect(() => {
     loadBench();
   }, []);
+
+  useEffect(() => () => streamAbortRef.current?.abort(), []);
 
   const onUpload = async (file, slotId) => {
     if (!file) return;
@@ -171,54 +221,97 @@ export default function LiveJobsPage() {
     }
   };
 
+  const runJobStream = async (mode, request) => {
+    streamAbortRef.current?.abort();
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+    const runId = ++streamRunIdRef.current;
+    const isScan = mode === 'scan';
+    const setLoading = isScan ? setLoadingScan : setLoadingIngest;
+
+    setScan(null);
+    setError('');
+    setStreamProgress({ received: 0, total: null, batch: 0, phase: '' });
+    setLoading(true);
+
+    const onEvent = (event) => {
+      if (runId !== streamRunIdRef.current) return;
+      if (event.type === 'batch') {
+        setScan((current) => {
+          const summary = event.summary || {};
+          const jobsNow = mergeJobRows(current?.jobs, event.jobs);
+          return {
+            ...(current || {}),
+            ...summary,
+            jobs: jobsNow,
+            job_count: event.total_jobs ?? summary.job_count ?? jobsNow.length,
+            _meta: { ...(current?._meta || {}), ...(summary._meta || {}) },
+          };
+        });
+        setStreamProgress((current) => ({
+          ...current,
+          received: event.received_jobs ?? current.received,
+          total: event.total_jobs ?? current.total,
+          batch: event.batch_index ?? current.batch,
+          phase: event.phase || current.phase,
+        }));
+      } else if (event.type === 'complete') {
+        const result = isScan ? event.result : normalizeIngestResult(event.result, peopleList.length);
+        setScan(result);
+        setStreamProgress((current) => ({
+          ...current,
+          received: result?.jobs?.length || 0,
+          total: result?.jobs?.length || 0,
+          phase: 'complete',
+        }));
+      }
+    };
+
+    try {
+      const result = await request(onEvent, controller.signal);
+      if (mode === 'ingest' && runId === streamRunIdRef.current) {
+        const data = normalizeIngestResult(result, peopleList.length);
+        const list = data.jobs;
+        if (list.length) {
+          const dated = data.verified_job_count ?? list.filter((job) => job.recency !== 'date_unverified').length;
+          const undated = data.unverified_job_count ?? list.filter((job) => job.recency === 'date_unverified').length;
+          toast.success(`${dated} date-verified job${dated === 1 ? '' : 's'}${undated ? `, ${undated} with unverified dates` : ''}`);
+        }
+      }
+      return result;
+    } catch (err) {
+      if (err?.name !== 'AbortError' && runId === streamRunIdRef.current) {
+        setError(err.message);
+        if (mode === 'ingest') toast.error(err.message);
+      }
+      return null;
+    } finally {
+      if (runId === streamRunIdRef.current) {
+        setLoading(false);
+        streamAbortRef.current = null;
+      }
+    }
+  };
+
   const onScan = async () => {
     const url = jobUrl.trim();
     if (url) {
       await runIngest(url);
       return;
     }
-    setLoadingScan(true);
-    setError('');
-    try {
-      setScan(await api.liveJobsScan());
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoadingScan(false);
-    }
+    await runJobStream(
+      'scan',
+      (onEvent, signal) => api.liveJobsScanStream({
+        skills: liveScanSkills,
+        locations: liveScanLocations,
+      }, onEvent, signal),
+    );
   };
 
-  const runIngest = async (url) => {
-    setLoadingIngest(true);
-    setError('');
-    try {
-      const data = await api.liveJobsIngest(url);
-      const list = asJobList(data);
-      setScan({
-        ...(data || {}),
-        jobs: list,
-        job_count: data.job_count ?? list.length,
-        in_window_count: data.in_window_count ?? list.length,
-        verified_job_count: data.verified_job_count ?? data.in_window_count ?? list.length,
-        unverified_job_count: data.unverified_job_count ?? list.filter((job) => job.recency === 'date_unverified').length,
-        window_minutes: data.window_minutes || (data.window_days ? data.window_days * 24 * 60 : 30),
-        window_days: data.window_days || 14,
-        fallback_used: false,
-        bench_loaded: peopleList.length,
-        scanned_at: data.scanned_at || new Date().toISOString(),
-        _meta: data._meta || { note: 'Jobs from the pasted URL (last 2 weeks, dated posts only).' },
-      });
-      if (list.length) {
-        const dated = data.verified_job_count ?? list.filter((job) => job.recency !== 'date_unverified').length;
-        const undated = data.unverified_job_count ?? list.filter((job) => job.recency === 'date_unverified').length;
-        toast.success(`${dated} date-verified job${dated === 1 ? '' : 's'}${undated ? `, ${undated} with unverified dates` : ''}`);
-      }
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setLoadingIngest(false);
-    }
-  };
+  const runIngest = async (url) => runJobStream(
+    'ingest',
+    (onEvent, signal) => api.liveJobsIngestStream(url, onEvent, signal),
+  );
 
   const onIngest = async (e) => {
     e.preventDefault();
@@ -236,7 +329,7 @@ export default function LiveJobsPage() {
         exhibit="G"
         eyebrow="Staffing signal"
         title="Live jobs from your talent bench"
-        description="Two modes: scan fresh public AI/software posts, or paste a LinkedIn company page, Naukri URL, Greenhouse job board, job post, or company website to find dated jobs from the last 2 weeks. Resume matching is separate from job discovery. We never log in or auto-message recruiters."
+        description="Two modes: scan fresh public AI/software posts, or paste a LinkedIn company page, Naukri URL, Greenhouse job board, job post, or company website to find dated jobs from the last 2 weeks. Live scans can be narrowed to up to five skills and selected locations. Resume matching is separate from job discovery. We never log in or auto-message recruiters."
       />
 
       <div className="stack stack--lg">
@@ -301,6 +394,58 @@ export default function LiveJobsPage() {
         </Card>
 
         <Card>
+          <CardHeader icon={Radar} title="Live scan filters" />
+          <p className="form-hint" style={{ marginTop: 0 }}>
+            Optional filters for the <strong>Scan last 30 minutes</strong> search. A job must mention at least one selected skill and one selected location when those filters are used. Company-link searches remain unchanged.
+          </p>
+          <div className="job-filter-grid">
+            <div>
+              <label className="form-label" htmlFor="live-job-skills">Skills (up to 5)</label>
+              <TagInput
+                id="live-job-skills"
+                value={liveScanSkills}
+                onChange={(next) => setLiveScanSkills(next.slice(0, MAX_LIVE_SCAN_SKILLS))}
+                placeholder="Python, Java, AI/ML…"
+                label="Live job skills"
+              />
+              <p className="form-hint">
+                Press Enter or type a comma after each skill. {liveScanSkills.length}/{MAX_LIVE_SCAN_SKILLS} added.
+              </p>
+            </div>
+            <div>
+              <span className="form-label" id="live-job-locations-label">Job locations</span>
+              <details className="job-location-picker">
+                <summary className="input job-location-summary" aria-labelledby="live-job-locations-label">
+                  <span>
+                    {liveScanLocations.length
+                      ? `${liveScanLocations.length} location${liveScanLocations.length === 1 ? '' : 's'} selected`
+                      : 'Any location'}
+                  </span>
+                  <ChevronDown size={17} aria-hidden="true" />
+                </summary>
+                <div className="job-location-menu">
+                  {LIVE_JOB_LOCATIONS.map((location) => (
+                    <label className="job-location-option" key={location.id}>
+                      <input
+                        type="checkbox"
+                        checked={liveScanLocations.includes(location.id)}
+                        onChange={() => {
+                          setLiveScanLocations((current) => current.includes(location.id)
+                            ? current.filter((id) => id !== location.id)
+                            : [...current, location.id]);
+                        }}
+                      />
+                      <span>{location.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </details>
+              <p className="form-hint">Select one or more locations. Leave empty to search all locations.</p>
+            </div>
+          </div>
+        </Card>
+
+        <Card>
           <form onSubmit={onIngest} className="stack">
             <label className="form-label" htmlFor="job-url">
               Company, Naukri / Greenhouse board, website, or job URL
@@ -326,14 +471,20 @@ export default function LiveJobsPage() {
               </Button>
             </div>
             <p className="form-hint">
-              Find last 2 weeks uses the pasted source and keeps verifiably dated posts. Greenhouse boards are checked through their public job-board API. Leave the URL box empty to scan recent live jobs.
+              Results arrive in groups of 5, up to 20 exact public listings. Find last 2 weeks uses the pasted source and keeps verifiably dated posts. Greenhouse boards are checked through their public job-board API. Leave the URL box empty to scan recent live jobs. If fewer listings pass the date/source checks, none are invented.
             </p>
           </form>
         </Card>
 
-        {error && !loadingScan && (
-          <Banner tone="error" title="Live jobs scan failed">
+        {error && !loadingScan && !loadingIngest && (
+          <Banner tone="error" title="Live jobs request failed">
             {error}
+          </Banner>
+        )}
+
+        {(loadingScan || loadingIngest) && streamProgress.received > 0 && (
+          <Banner tone="info" title="Live results are arriving">
+            Showing {streamProgress.received}{streamProgress.total ? ` of ${streamProgress.total}` : ''} result{streamProgress.received === 1 ? '' : 's'} now. New verified results are released in batches of {STREAM_BATCH_SIZE}.
           </Banner>
         )}
 
@@ -372,6 +523,9 @@ export default function LiveJobsPage() {
                 )}
                 <p className="form-hint">
                   {stats.posting_dates_verified ?? 0} dates verified · {stats.date_unverified ?? 0} unverified · {stats.outside_fallback_window ?? stats.outside_window ?? 0} outside date window
+                </p>
+                <p className="form-hint">
+                  {stats.filtered_by_skill ?? 0} filtered by skill · {stats.filtered_by_location ?? 0} filtered by selected location
                 </p>
                 {source === 'naukri' && (
                   <p className="form-hint">
@@ -419,7 +573,7 @@ export default function LiveJobsPage() {
           </EmptyState>
         )}
 
-        {!loadingScan && jobs.length > 0 && (
+        {jobs.length > 0 && (
           <>
             <p className="form-hint">
               Fit compares technical skills detected in the listing text with skills extracted from each resume. Strong means at least 3 detected skills and 70% overlap; Possible means at least one match and 40% overlap. “Not found” means the skill was not extracted from the resume, not that the candidate lacks it. Listing mentions may be preferred rather than required.

@@ -21,13 +21,14 @@ async function send(path, options, fallbackMessage) {
   return { response, fallbackMessage };
 }
 
-async function postJson(path, body, fallbackMessage) {
+async function postJson(path, body, fallbackMessage, requestOptions = {}) {
   const { response } = await send(
     path,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      ...requestOptions,
     },
     fallbackMessage,
   );
@@ -39,6 +40,72 @@ async function postJson(path, body, fallbackMessage) {
   }
   if (!response.ok) throw new Error(detailToMessage(data?.detail, fallbackMessage));
   return data;
+}
+
+async function streamJson(path, body, onEvent, fallbackMessage, signal) {
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+      signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error;
+    throw new Error('Cannot reach the backend. Check that it is running on port 8765.');
+  }
+
+  if (!response.ok) {
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detailToMessage(data?.detail, fallbackMessage));
+  }
+
+  if (!response.body) {
+    const result = await response.json();
+    onEvent?.({ type: 'complete', result });
+    return result;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let completed = null;
+
+  const consume = (text) => {
+    buffer += text;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        throw new Error('The backend sent an invalid live-results update.');
+      }
+      if (event.type === 'error') {
+        throw new Error(detailToMessage(event.detail, fallbackMessage));
+      }
+      if (event.type === 'complete') completed = event.result;
+      onEvent?.(event);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    consume(decoder.decode(value, { stream: true }));
+  }
+  consume(decoder.decode());
+  if (!completed) throw new Error('The live-results stream ended before completion.');
+  return completed;
 }
 
 export const api = {
@@ -59,7 +126,8 @@ export const api = {
     return data;
   },
 
-  companyResearch: (url) => postJson('/api/company-research', { url }, 'Research failed'),
+  companyResearch: (url) =>
+    postJson('/api/company-research', { url }, 'Research failed', { cache: 'no-store' }),
 
   generatePitch: (brochure, target) =>
     postJson('/api/generate-pitch', { brochure, target }, 'Pitch failed'),
@@ -118,15 +186,29 @@ export const api = {
     return data;
   },
 
-  liveJobsScan: () =>
+  liveJobsScan: (filters = {}) =>
     postJson('/api/live-jobs/scan', {
       minutes: 30,
       sources: ['linkedin', 'naukri'],
       include_unverified_recent: true,
+      skills: filters.skills || [],
+      locations: filters.locations || [],
     }, 'Job scan failed'),
+
+  liveJobsScanStream: (filters = {}, onEvent, signal) =>
+    streamJson('/api/live-jobs/scan/stream', {
+      minutes: 30,
+      sources: ['linkedin', 'naukri'],
+      include_unverified_recent: true,
+      skills: filters.skills || [],
+      locations: filters.locations || [],
+    }, onEvent, 'Job scan failed', signal),
 
   liveJobsIngest: (url) =>
     postJson('/api/live-jobs/ingest', { url, days: 14 }, 'Could not load jobs from that URL'),
+
+  liveJobsIngestStream: (url, onEvent, signal) =>
+    streamJson('/api/live-jobs/ingest/stream', { url, days: 14 }, onEvent, 'Could not load jobs from that URL', signal),
 
   async exportPdf({ brochure, target, pitch, aeo }) {
     const { response } = await send('/api/export-pdf', {

@@ -38,7 +38,7 @@ export default function Sidebar({ open, onNavigate }) {
         </span>
         <span>
           <span className="brand__name" style={{ display: 'block' }}>
-            Casefile
+            CompareFlow.ai
           </span>
           <span className="brand__tag" style={{ display: 'block' }}>
             Client intelligence &amp; outreach

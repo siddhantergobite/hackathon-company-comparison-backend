@@ -10,6 +10,7 @@ Phase 5 — REPORT    : Structured deep intelligence JSON
 
 import os, re, json, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from urllib.parse import urlparse, urljoin
 import requests
 from dotenv import load_dotenv
@@ -30,11 +31,15 @@ MODEL = (
 )
 
 # Production default is the fast authentic path (~30–70s).
-# Set RESEARCH_DEEP=1 only when you want the old multi-minute DDG + extra LLM judge sweep.
+# Set RESEARCH_DEEP=1 when you want the broader multi-minute discovery sweep.
 RESEARCH_DEEP = os.getenv("RESEARCH_DEEP", "0").strip().lower() not in ("0", "false", "no", "off")
 RESEARCH_FAST = not RESEARCH_DEEP
-# Extra LLM-as-judge / hiring DDG only run in deep mode. Stale .env SKIP_*=0 is ignored.
-RESEARCH_SKIP_JUDGE = True if not RESEARCH_DEEP else False
+# Fast mode is the normal interactive path.  Keep the broad, useful report
+# produced by the main research model in that path; the slower deep mode still
+# runs the stricter report judge before returning.  This was the original
+# behavior and avoids turning a transient judge response into an almost-empty
+# report.
+RESEARCH_SKIP_JUDGE = not RESEARCH_DEEP
 RESEARCH_SKIP_HIRING_SEARCH = True if not RESEARCH_DEEP else False
 # Model-assisted gap-fill for leadership/HQ when the site scrape finds nothing.
 # Runs in fast mode too: an empty leadership panel is worse than a short extra call.
@@ -75,10 +80,44 @@ KNOWN_BRANDS = {
     "deloitte": "Deloitte",
 }
 
+KNOWN_TICKERS = {
+    "microsoft": "MSFT",
+    "google": "GOOGL",
+    "apple": "AAPL",
+    "amazon": "AMZN",
+    "salesforce": "CRM",
+}
+
+# Many companies publish their corporate pages on descriptive subdomains
+# (about.google, careers.microsoft.com, jobs.amazon.com). The subdomain is a
+# page type, not the company identity.
+GENERIC_SITE_SUBDOMAINS = {
+    "about", "careers", "career", "jobs", "job", "investor", "investors",
+    "ir", "support", "help", "news", "blog", "blogs", "corporate", "company",
+}
+PUBLIC_SUFFIX_PARTS = {"co", "com", "org", "net", "gov", "ac"}
+
+
+def _domain_parts(domain: str) -> list[str]:
+    d = (domain or "").lower().split(":", 1)[0].strip(".")
+    parts = [p for p in d.split(".") if p]
+    if parts and parts[0] == "www":
+        parts = parts[1:]
+    return parts
+
 
 def _domain_stem(domain: str) -> str:
-    d = (domain or "").lower().replace("www.", "")
-    return (d.split(".")[0] if d else "").strip()
+    parts = _domain_parts(domain)
+    if not parts:
+        return ""
+    if parts[0] in GENERIC_SITE_SUBDOMAINS and len(parts) >= 2:
+        # Handle both about.google and careers.example.co.uk.
+        if len(parts) == 2:
+            return parts[1]
+        if len(parts) >= 3 and parts[-2] in PUBLIC_SUFFIX_PARTS:
+            return parts[-3]
+        return parts[-2]
+    return parts[0]
 
 
 def _brand_from_domain(domain: str) -> str:
@@ -104,6 +143,23 @@ def _is_blocked_page_text(title: str = "", text: str = "") -> bool:
         "sorry, you have been blocked",
     )
     return any(m in blob for m in markers)
+
+
+def _is_parked_page_text(title: str = "", text: str = "") -> bool:
+    """Detect a parked/for-sale domain, which is not company evidence."""
+    blob = f"{title or ''} {text or ''}".lower()
+    markers = (
+        "huge domains",
+        "this domain is for sale",
+        "domain name is for sale",
+        "buy this domain",
+        "make an offer for this domain",
+        "domain parking",
+        "parked domain",
+        "this website is for sale",
+        "domain has been registered",
+    )
+    return any(marker in blob for marker in markers)
 
 
 def _name_matches_domain(name: str, domain: str) -> bool:
@@ -2039,6 +2095,8 @@ def _scrape_website(url: str, include_wiki: bool = False) -> dict:
         "pricing_text": "", "careers_text": "", "blog_text": "",
         "leadership_text": "", "nav_links": [], "social_links": [],
         "emails": [], "phones": [], "tech_hints": [],
+        "_homepage_reachable": False, "_homepage_status": None,
+        "_site_parked": False,
         "_structured": {}, "_page_urls": {},
     }
 
@@ -2058,6 +2116,8 @@ def _scrape_website(url: str, include_wiki: bool = False) -> dict:
                 "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
             )
             resp = requests.get(url, headers=alt, timeout=home_timeout, allow_redirects=True)
+        result["_homepage_reachable"] = True
+        result["_homepage_status"] = resp.status_code
         resp.raise_for_status()
         _homepage_raw = resp.text
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -2118,6 +2178,22 @@ def _scrape_website(url: str, include_wiki: bool = False) -> dict:
     result["_scrape_blocked"] = _is_blocked_page_text(
         result.get("title") or "", result.get("homepage_text") or ""
     )
+    result["_site_parked"] = _is_parked_page_text(
+        result.get("title") or "", result.get("homepage_text") or ""
+    )
+    if result["_site_parked"]:
+        # Do not let a domain marketplace title become the company identity or
+        # allow its generic contact details into the report.
+        brand = _brand_from_domain(parsed.netloc.replace("www.", ""))
+        print(f"[Research] Parked domain detected — refusing synthetic report for '{brand}'")
+        result["title"] = brand
+        result["description"] = f"{brand} public website is unavailable (parked domain)"
+        result["homepage_text"] = ""
+        result["about_text"] = ""
+        result["products_text"] = ""
+        result["careers_text"] = ""
+        result["leadership_text"] = ""
+        result["contact_data"] = {"phones": [], "emails": [], "address": "", "addresses": [], "source_pages": []}
     if result["_scrape_blocked"]:
         brand = _brand_from_domain(parsed.netloc.replace("www.", ""))
         print(f"[Research] Homepage looks blocked/WAF — anchoring brand to '{brand}'")
@@ -2500,6 +2576,16 @@ def _normalize_leader_row(leader: dict, company_name: str = "", scraped: dict = 
     ).strip()
     # Honorifics are not part of the name
     name = re.sub(r"(?i)^(?:mr|mrs|ms|miss|dr|prof|shri|smt|sri)\.?\s+", "", name).strip()
+    # Scraped cards sometimes concatenate the company brand or ticker to a
+    # person's name (for example, "Satya NadellaMSFT"). Keep the person name
+    # clean while leaving legitimate separated suffixes untouched.
+    if company_name:
+        company_l = re.sub(r"[^a-z0-9]", "", company_name.lower())
+        for brand, ticker in KNOWN_TICKERS.items():
+            if brand in company_l:
+                name = re.sub(rf"(?i)(?<!\s){re.escape(ticker)}$", "", name).strip()
+                break
+        name = re.sub(rf"(?i)^{re.escape(company_name)}\s+(?=[A-Z])", "", name).strip()
 
     # Role hygiene: drop the company name and any "at <Company>" tail
     role = re.sub(r"(?i)\s+at\s+[A-Z][\w&.'\- ]{2,40}$", "", role).strip()
@@ -2965,6 +3051,407 @@ def _parse_llm_json(raw: str) -> dict:
 # Evidence blobs computed in the background while the main LLM call runs, keyed by (company, domain).
 _EVIDENCE_PREFETCH: dict = {}
 
+# A failed contact lookup must not make repeated UI retries fan out into a new
+# set of searches and model calls.  Cache only the final, sanitized decision —
+# never the raw model answer or the search snippets.
+_PUBLIC_CONTACT_CACHE: dict = {}
+_PUBLIC_CONTACT_CACHE_LOCK = Lock()
+_PUBLIC_CONTACT_CACHE_TTL = 15 * 60
+
+
+def _public_contact_cache_key(company_name: str, domain: str) -> str:
+    return f"{(domain or '').lower().strip()}::{(company_name or '').lower().strip()}"
+
+
+def _public_contact_cache_get(key: str) -> dict | None:
+    with _PUBLIC_CONTACT_CACHE_LOCK:
+        row = _PUBLIC_CONTACT_CACHE.get(key)
+        if not row:
+            return None
+        if time.monotonic() - row.get("at", 0) > _PUBLIC_CONTACT_CACHE_TTL:
+            _PUBLIC_CONTACT_CACHE.pop(key, None)
+            return None
+        # Reports are mutated after the fallback is attached.  Return a JSON
+        # copy so one request cannot change the cached decision for another.
+        return json.loads(json.dumps(row.get("value") or {}))
+
+
+def _public_contact_cache_put(key: str, value: dict) -> None:
+    with _PUBLIC_CONTACT_CACHE_LOCK:
+        _PUBLIC_CONTACT_CACHE[key] = {
+            "at": time.monotonic(),
+            "value": json.loads(json.dumps(value or {})),
+        }
+
+
+def _public_contact_evidence(
+    company_name: str,
+    domain: str,
+    scraped: dict | None = None,
+    intel: dict | None = None,
+) -> list[dict]:
+    """Collect small, public evidence records for the contact verifier.
+
+    This is intentionally separate from the broad research sweep.  It searches
+    only for the exact company and only forwards snippets/URLs to the two-pass
+    contact flow.  ChatGPT/OpenAI/login pages are excluded before the model sees
+    them, so they can never become citations for a contact.
+    """
+    scraped = scraped or {}
+    intel = intel or {}
+    records: list[dict] = []
+    seen: set[str] = set()
+    blocked_hosts = (
+        "chatgpt.com", "chat.openai.com", "openai.com/chat",
+        "accounts.google", "login.microsoftonline", "duckduckgo.com",
+    )
+
+    def _same_company_url(href: str) -> bool:
+        try:
+            host = urlparse(href).netloc.lower().replace("www.", "")
+        except Exception:
+            return False
+        cd = (domain or "").lower().replace("www.", "")
+        return bool(cd and (host == cd or host.endswith("." + cd)))
+
+    def _add(href: str, title: str, snippet: str, source: str = "Public web") -> None:
+        href = str(href or "").strip()
+        if not href.startswith(("http://", "https://")):
+            return
+        low = href.lower()
+        if any(host in low for host in blocked_hosts):
+            return
+        snippet = re.sub(r"\s+", " ", str(snippet or "")).strip()
+        title = re.sub(r"\s+", " ", str(title or "")).strip()
+        blob = f"{title} {snippet}"
+        if not _same_company_url(href) and not _blob_matches_brand(blob, company_name, domain):
+            return
+        # Keep the exact page once.  A URL with no useful text is not evidence.
+        key = href.rstrip("/").lower()
+        if key in seen or (not title and not snippet):
+            return
+        seen.add(key)
+        records.append({
+            "url": href,
+            "title": title[:180],
+            "snippet": snippet[:900],
+            "source": source[:100],
+        })
+
+    cd = scraped.get("contact_data") or {}
+    contact_pages = list(cd.get("source_pages") or [])
+    fallback_page = contact_pages[0] if contact_pages else f"https://{domain}/"
+    for item in (cd.get("emails") or [])[:8]:
+        if isinstance(item, dict) and item.get("email"):
+            _add(
+                fallback_page,
+                "Public company contact page",
+                f"Public business email listed: {item.get('email')} "
+                f"{item.get('person') or item.get('person_name') or ''}",
+                "Company Website",
+            )
+    for item in (cd.get("phones") or [])[:8]:
+        if isinstance(item, dict) and item.get("number"):
+            _add(
+                fallback_page,
+                "Public company contact page",
+                f"Public business phone listed: {item.get('number')} "
+                f"{item.get('person') or item.get('person_name') or ''}",
+                "Company Website",
+            )
+
+    structured = scraped.get("_structured") or {}
+    page_urls = scraped.get("_page_urls") or {}
+    for key, label in (
+        ("leadership_text", "Company leadership page"),
+        ("about_text", "Company about page"),
+        ("homepage_text", "Company website"),
+    ):
+        text_value = structured.get(key) or scraped.get(key) or ""
+        if text_value:
+            _add(
+                page_urls.get(key) or f"https://{domain}/",
+                label,
+                text_value[:1100],
+                "Company Website",
+            )
+
+    wiki_url = scraped.get("wikipedia_url") or ""
+    wiki_text = scraped.get("wikipedia_summary") or scraped.get("wikipedia_text") or ""
+    if wiki_url and wiki_text:
+        _add(wiki_url, "Wikipedia", wiki_text[:1100], "Wikipedia")
+
+    wd = scraped.get("_wikidata") or intel.get("_wikidata") or {}
+    if wd.get("source_url") and (wd.get("ceo") or wd.get("chair") or wd.get("founders")):
+        _add(
+            wd.get("source_url"),
+            "Wikidata company record",
+            f"{company_name} ({domain}) current CEO: " + ", ".join(wd.get("ceo") or [])
+            + "; current chair: " + ", ".join(wd.get("chair") or [])
+            + "; founders: " + ", ".join(wd.get("founders") or []),
+            "Wikidata",
+        )
+
+    # Search is the recovery path when the company site does not publish a
+    # contact.  Run the bounded queries concurrently and keep only branded hits.
+    queries = [
+        f'"{company_name}" current CEO OR "managing director" OR president',
+        f'"{company_name}" contact email OR phone',
+        f'site:{domain} (contact OR leadership OR team OR "about us")',
+    ]
+
+    def _search_one(query: str) -> list:
+        try:
+            return _ddg_search(query, max_results=5)
+        except Exception as exc:  # noqa: BLE001 - one source must not break research
+            print(f"[Research] Contact search failed for '{query}': {exc}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        for query, query_rows in zip(queries, pool.map(_search_one, queries)):
+            for row in query_rows or []:
+                if not isinstance(row, dict):
+                    continue
+                href = row.get("href") or row.get("link") or ""
+                title = row.get("title") or ""
+                body = row.get("body") or row.get("snippet") or ""
+                _add(
+                    href,
+                    title,
+                    f"{body} Search query: {query}",
+                    _site_category(href, domain) if href else "Public Web",
+                )
+
+    # Official pages and structured records are more useful to the judge than
+    # generic result pages.  The order also keeps the prompt within its bound.
+    records.sort(key=lambda r: (0 if _same_company_url(r.get("url") or "") else 1, r.get("url") or ""))
+    return records[:18]
+
+
+def _public_contact_fallback(
+    company_name: str,
+    domain: str,
+    scraped: dict,
+    intel: dict,
+    existing_leaders: list | None = None,
+) -> dict:
+    """Use a model knowledge fallback, then show it only after a judge gate.
+
+    The returned ``contact`` is already sanitized and may be rendered.  Raw
+    extraction output and rejected candidates are intentionally not returned.
+    """
+    from backend.services import llm_judge
+
+    cache_key = _public_contact_cache_key(company_name, domain)
+    cached = _public_contact_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    result = {"status": "unavailable", "contact": {}, "source_urls": []}
+    evidence = _public_contact_evidence(company_name, domain, scraped, intel)
+    if not evidence:
+        result["status"] = "no_public_evidence"
+        _public_contact_cache_put(cache_key, result)
+        return result
+
+    prompt = f"""Find a PUBLIC business point of contact for this exact company.
+
+Company: {company_name}
+Official website: https://{domain}/
+
+Use only the public evidence below plus clearly known public company knowledge. The answer
+is a candidate, not proof, and will be sent to a separate authenticity judge. Never provide
+confidential/private data. Do not invent email addresses or phone numbers. A current CEO,
+Managing Director, President, Chair, Founder/Owner, or an explicitly listed official contact
+is acceptable. Historical founders are not current contacts.
+
+PUBLIC EVIDENCE:
+{json.dumps(evidence, ensure_ascii=False)[:9000]}
+
+Return JSON only:
+{{
+  "name": "public contact name or empty",
+  "title": "current role or empty",
+  "email": "exact email shown in evidence or empty",
+  "phone": "exact phone shown in evidence or empty",
+  "source_urls": ["URLs from evidence that support the answer"],
+  "reason": "short explanation"
+}}
+"""
+    try:
+        raw = llm_client.chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return valid JSON only. Find public business contacts, never private data. "
+                        "Do not guess emails, phones, names, or titles."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=650,
+            json_mode=True,
+            timeout=50.0,
+            reasoning_effort="low",
+        )
+        candidate = _parse_llm_json(raw)
+    except Exception as exc:  # noqa: BLE001 - fallback is optional by design
+        print(f"[Research] Public contact candidate failed: {exc}")
+        result["status"] = "candidate_unavailable"
+        _public_contact_cache_put(cache_key, result)
+        return result
+
+    allowed_urls = {r.get("url") for r in evidence if r.get("url")}
+    candidate["source_urls"] = [
+        u for u in (candidate.get("source_urls") or [])
+        if isinstance(u, str) and u in allowed_urls
+    ]
+    if not any(str(candidate.get(k) or "").strip() for k in ("name", "email", "phone")):
+        result["status"] = "candidate_empty"
+        _public_contact_cache_put(cache_key, result)
+        return result
+
+    verdict = llm_judge.judge_public_point_of_contact(
+        website_url=f"https://{domain}/",
+        domain=domain,
+        company_name=company_name,
+        candidate=candidate,
+        evidence=evidence,
+        existing_leaders=existing_leaders,
+    )
+    if verdict.get("_error") or not verdict.get("accept"):
+        result["status"] = "rejected"
+        _public_contact_cache_put(cache_key, result)
+        return result
+
+    source_urls = [u for u in (verdict.get("source_urls") or []) if u in allowed_urls]
+    confidence = str(verdict.get("confidence") or "Low")
+    if confidence.lower() == "low" or not source_urls:
+        result["status"] = "rejected_low_confidence"
+        _public_contact_cache_put(cache_key, result)
+        return result
+
+    name = re.sub(r"\s+", " ", str(verdict.get("name") or "")).strip(" ,;.|")
+    title = re.sub(r"\s+", " ", str(verdict.get("title") or "")).strip(" ,;.|")
+    email = str(verdict.get("email") or "").strip().lower()
+    phone = str(verdict.get("phone") or "").strip()
+    if name and (_is_org_like_name(name) or len(name.split()) < 2):
+        name = ""
+        title = ""
+    if email and not _email_domain_ok(email, domain):
+        email = ""
+    if phone and not _is_valid_phone(phone):
+        phone = ""
+    if phone and not any(
+        urlparse(u).netloc.lower().replace("www.", "") in (domain, "www." + domain)
+        or urlparse(u).netloc.lower().replace("www.", "").endswith("." + domain)
+        for u in source_urls
+    ):
+        # A phone number from a directory is not safe enough to promote as a
+        # personal point of contact; official company pages remain eligible.
+        phone = ""
+    if not any((name, email, phone)):
+        result["status"] = "rejected_after_sanitize"
+        _public_contact_cache_put(cache_key, result)
+        return result
+
+    result = {
+        "status": "verified",
+        "contact": {
+            "name": name,
+            "title": title,
+            "email": email,
+            "phone": phone,
+            "source": "Public contact judge",
+            "source_urls": source_urls[:5],
+            "confidence": confidence if confidence in ("High", "Medium") else "Medium",
+            "verified": True,
+            "provenance": "public-contact-judge",
+            "reason": str(verdict.get("reason") or "Supported by public company evidence")[:260],
+        },
+        "source_urls": source_urls[:5],
+    }
+    _public_contact_cache_put(cache_key, result)
+    return result
+
+
+def _maybe_add_public_point_of_contact(
+    report: dict,
+    company_name: str,
+    domain: str,
+    scraped: dict,
+    intel: dict,
+) -> dict:
+    """Attach only a verified fallback contact; never attach the raw candidate."""
+    ci = report.get("contact_intelligence") if isinstance(report.get("contact_intelligence"), dict) else {}
+    existing_named_email = any(
+        isinstance(e, dict) and e.get("email") and (e.get("person") or e.get("person_name") or e.get("name"))
+        for e in (ci.get("emails") or [])
+    )
+    if existing_named_email or auth.has_operating_exec(report.get("leadership_team") or []):
+        report["_contact_verification"] = {"status": "existing_public_contact", "source_urls": []}
+        # The caller keeps the function result as the full report.  Returning
+        # only the status object here silently replaced every report section
+        # with {status, source_urls}, leaving only fields rebuilt later.
+        return report
+
+    found = _public_contact_fallback(
+        company_name, domain, scraped, intel, report.get("leadership_team") or []
+    )
+    contact = found.get("contact") if isinstance(found, dict) else {}
+    if found.get("status") == "verified" and isinstance(contact, dict) and any(
+        contact.get(k) for k in ("name", "email", "phone")
+    ):
+        ci["public_point_of_contact"] = contact
+        emails = list(ci.get("emails") or [])
+        if contact.get("email") and not any(
+            isinstance(e, dict) and e.get("email", "").lower() == contact["email"]
+            for e in emails
+        ):
+            emails.append({
+                "email": contact["email"],
+                "person": contact.get("name") or "",
+                "person_name": contact.get("name") or "",
+                "title": contact.get("title") or "",
+                "label": contact.get("title") or "Public point of contact",
+                "source": contact.get("source") or "Public contact judge",
+                "source_urls": contact.get("source_urls") or [],
+                "confidence": contact.get("confidence") or "Medium",
+                "verified": True,
+                "provenance": "public-contact-judge",
+            })
+        ci["emails"] = emails[:20]
+        phones = list(ci.get("phones") or [])
+        if contact.get("phone") and not any(
+            isinstance(p, dict) and re.sub(r"\D", "", p.get("number", "")) == re.sub(r"\D", "", contact["phone"])
+            for p in phones
+        ):
+            phones.append({
+                "number": contact["phone"],
+                "person": contact.get("name") or "",
+                "person_name": contact.get("name") or "",
+                "label": contact.get("title") or "Public point of contact",
+                "source": contact.get("source") or "Public contact judge",
+                "source_urls": contact.get("source_urls") or [],
+                "confidence": contact.get("confidence") or "Medium",
+                "verified": True,
+                "provenance": "public-contact-judge",
+            })
+        ci["phones"] = phones[:20]
+        report["contact_intelligence"] = ci
+        report["_contact_verification"] = {
+            "status": "verified",
+            "source_urls": found.get("source_urls") or [],
+        }
+    else:
+        report["_contact_verification"] = {
+            "status": found.get("status") or "unavailable",
+            "source_urls": [],
+        }
+    return report
+
 
 def _site_evidence_blob(company_name: str, domain: str, scraped: dict) -> str:
     """Website + search snippets the verifier can check a claim against."""
@@ -3041,10 +3528,12 @@ def _llm_public_profile_fill(company_name: str, domain: str, scraped: dict,
         slim_evidence,
     ))
     scrape_note = (
-        "SITE SCRAPE HAS NO SITTING OFFICER NAMES. You MUST still return the current MD/CEO and Chairman "
-        "from well-known public facts about this exact company. Do not return an empty leaders array."
+        "SITE SCRAPE HAS NO SITTING OFFICER NAMES. Return an officer only when reliable public evidence "
+        "identifies this exact company and role. An empty leaders array is correct when evidence is missing; "
+        "never fill from memory or guesswork."
         if not scrape_names_officers else
-        "Prefer officers named in EVIDENCE; you may add other well-known sitting officers of this firm."
+        "Prefer officers named in EVIDENCE. You may add another officer only when reliable public evidence "
+        "identifies this exact company and role; otherwise omit the person."
     )
 
     extract_prompt = f"""You are filling a public company dossier.
@@ -3071,8 +3560,8 @@ Return ONLY JSON:
 
 Rules:
 - THIS company only, matching {domain}. Ignore similarly named firms.
-- Listed / well-known companies ALWAYS have a current MD or CEO and usually a Chairman.
-  Return the sitting MD/CEO and Chairman — not a 19th-century inventor as the current founder.
+- Return a sitting MD/CEO or Chairman only when supported by the evidence or a clearly matched public source.
+  If the role cannot be verified, return no row rather than guessing or using a 19th-century inventor as current.
 - Century-old companies: mark origin figures historical. Current operating officers are current.
 - Include Vice Chair / whole-time directors when publicly known.
 - hiring_roles: job titles tied to an official careers/ATS URL. If openings are not listed
@@ -3083,7 +3572,7 @@ Rules:
     try:
         raw = llm_client.chat(
             [
-                {"role": "system", "content": "Return valid JSON only. Public officers of the named company; empty only if you truly do not know this firm."},
+                {"role": "system", "content": "Return valid JSON only. Public officers of this exact company; omit any role that is not supported by reliable evidence."},
                 {"role": "user", "content": extract_prompt},
             ],
             temperature=0.1, max_tokens=1400, json_mode=True, timeout=80.0,
@@ -3108,8 +3597,9 @@ Rules:
         return False
 
     if not _has_current_officer(extracted.get("leaders") or []):
-        retry_prompt = f"""Name the CURRENT public officers of {company_name} (official site {domain}).
-This is a real operating company. Return the sitting MD or CEO, AND the Chairman if the company has a board.
+        retry_prompt = f"""Identify CURRENT public officers of {company_name} (official site {domain}).
+Return the sitting MD or CEO and Chairman only if reliable public evidence identifies them at this exact company.
+If the evidence does not support either person, return an empty leaders array. Do not guess.
 
 Return ONLY JSON:
 {{"leaders":[{{"name":"Full Name","role":"Managing Director|CEO|Chairman|President","status":"current","confidence":"High"}}],"careers_url":"https://... or empty"}}
@@ -3117,7 +3607,7 @@ Return ONLY JSON:
         try:
             raw_r = llm_client.chat(
                 [
-                    {"role": "system", "content": "Return valid JSON only. Sitting public officers of this exact company."},
+                    {"role": "system", "content": "Return valid JSON only. Sitting public officers of this exact company; return an empty list when unsupported."},
                     {"role": "user", "content": retry_prompt},
                 ],
                 temperature=0.0, max_tokens=600, json_mode=True, timeout=50.0,
@@ -3180,8 +3670,8 @@ Return ONLY JSON:
 }}
 
 Judge rules:
-- KEEP the current MD, CEO, Chairman, President, Vice Chair if you independently know they hold that seat at THIS company.
-- Returning an empty keep_leaders list for a well-known public company is a judge failure — keep the sitting officers.
+- KEEP the current MD, CEO, Chairman, President, Vice Chair only when reliable evidence supports that exact seat at THIS company.
+- An empty keep_leaders list is correct when the candidates are not supported by evidence. Never add a person from memory.
 - DROP customer/partner executives and anyone at a different company.
 - DROP 19th/early-20th century inventors labelled as current founder of a listed successor company; they may be kept only as historical.
 - Keep hiring_roles only with an official careers/ATS URL for this employer.
@@ -3190,7 +3680,7 @@ Judge rules:
     try:
         raw2 = llm_client.chat(
             [
-                {"role": "system", "content": "Return valid JSON only. You are a verifier. Keep known public officers of this firm; do not empty a listed company's leadership."},
+                {"role": "system", "content": "Return valid JSON only. You are a strict verifier. Keep only public officers supported for this exact firm; empty is valid when uncertain."},
                 {"role": "user", "content": verify_prompt},
             ],
             temperature=0.0, max_tokens=1200, json_mode=True, timeout=80.0,
@@ -3201,28 +3691,15 @@ Judge rules:
         print(f"[Research] Public-profile verify failed: {e}")
         verified = {}
 
-    def _current_officer_rows(rows):
-        out = []
-        for row in rows or []:
-            if not isinstance(row, dict):
-                continue
-            role = str(row.get("role") or "")
-            st = str(row.get("status") or auth.leader_status(role))
-            if st == "historical":
-                continue
-            if re.search(r"(?i)\b(managing director|\bmd\b|ceo|chief executive|chairman|chairperson|president|vice chair)", role):
-                out.append(row)
-        return out
-
     if verified and "keep_leaders" in verified:
         source_rows = list(verified.get("keep_leaders") or [])
-        # Judge must not wipe a well-known firm's sitting officers
         if not source_rows:
-            source_rows = _current_officer_rows(extracted.get("leaders") or [])
-            if source_rows:
-                print("[Research] Judge returned empty keep_leaders — restoring extracted current officers")
+            print("[Research] Profile judge kept no unsupported officer claims")
     else:
-        source_rows = extracted.get("leaders") or []
+        # A failed or malformed verification pass must not leak unverified
+        # model-generated people into the report. Existing scraped/Wikidata
+        # leaders remain available for the mandatory final report judge.
+        source_rows = []
 
     out_leaders = list(existing_leaders or [])
     seen = {(l.get("name") or "").lower() for l in out_leaders}
@@ -3808,7 +4285,7 @@ Return ONLY compact JSON. IMPORTANT schema rules:
 - swot_analysis: ALL 4 keys strengths/weaknesses/opportunities/threats as arrays of
   {{"point","source","confidence"}} — at least 3 points each. Never use "Not publicly available" as a point.
 - competitors: array of at least 3 objects {{"name","description","strengths","weaknesses","threat_level","source","confidence"}}
-- leadership_team: array of {{"name","role","source","confidence","background"}} for people named in Wikipedia/website/leadership sources. If those clips are empty, you MAY include well-known public officers of THIS exact company (matching the website); still omit anyone you are not sure about.
+- leadership_team: array of {{"name","role","source","confidence","background"}} for people supported by Wikipedia/website/leadership sources or clearly domain-matched public evidence. If evidence is missing, return an empty array; never fill a role from memory.
 - risk_assessment: overall_risk_level string + regulatory/competitive/operational/reputational_risks as arrays of {{"risk","source","confidence"}}
 - financial_data: revenue/funding only if found in scrapes; else Not publicly available
 - recent_news: array of objects; intelligence_score: {{"overall","data_completeness","source_reliability","summary"}}
@@ -4494,17 +4971,30 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
         else:
             offerings.append(str(o))
     offerings_hint = ", ".join(x for x in offerings if x) or (scraped.get("description") or "")[:300]
+    offerings_hint = "\n".join(
+        part for part in (offerings_hint, scraped.get("products_text") or "") if part
+    )[:1800]
     wd = scraped.get("_wikidata") or {}
+    site_evidence = "\n".join(
+        part for part in (
+            scraped.get("title") or "",
+            scraped.get("description") or "",
+            scraped.get("about_text") or "",
+            scraped.get("leadership_text") or "",
+            scraped.get("homepage_text") or "",
+        ) if part
+    )[:2600]
 
     verdict = llm_judge.judge_research_report(
         website_url=url,
         domain=domain,
         brand_name=company_name,
-        site_excerpt=(scraped.get("about_text") or scraped.get("homepage_text") or "")[:1400],
+        site_excerpt=site_evidence,
         offerings_hint=offerings_hint,
         report=report,
         wikidata_hint=wd,
     )
+    judge_available = not bool(verdict.get("_error"))
     print(
         "[Judge] quality=%s drop_registry=%s leadership_keep=%s reasons=%s"
         % (
@@ -4565,8 +5055,9 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
             "source": c.get("source") or "Judge-validated",
             "confidence": conf if conf in ("High", "Medium") else "Medium",
         })
-    if judged_comps:
-        report["competitors"] = judged_comps[:6]
+    # Never fall back to the raw model/search competitor list. An empty judged
+    # list is intentional: no same-business competitor cleared the scope gate.
+    report["competitors"] = judged_comps[:6] if judge_available else []
 
     # Geographic reach — must be a display string
     ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
@@ -4624,55 +5115,59 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
         judged_keep[(row.get("name") or "").lower()] = row
 
     leaders = []
-    for ldr in report.get("leadership_team") or []:
-        if not isinstance(ldr, dict) or not ldr.get("name"):
-            continue
-        key = ldr["name"].strip().lower()
-        if key in drop_names:
-            continue
-        src = str(ldr.get("source") or "").lower()
-        if "zauba" in src or "mca" in src or "cin" in src or ldr.get("din"):
-            continue
-        if str(ldr.get("confidence") or "").lower() == "low":
-            continue
-        if key in judged_keep:
+    if judge_available:
+        for ldr in report.get("leadership_team") or []:
+            if not isinstance(ldr, dict) or not ldr.get("name"):
+                continue
+            key = ldr["name"].strip().lower()
+            # A leader must be explicitly kept by the judge. Omission is not
+            # treated as approval for a CEO/founder/chairman claim.
+            if key in drop_names or key not in judged_keep:
+                continue
+            src = str(ldr.get("source") or "").lower()
+            if "zauba" in src or "mca" in src or "cin" in src or ldr.get("din"):
+                continue
+            if str(ldr.get("confidence") or "").lower() == "low":
+                continue
             j = judged_keep[key]
+            ldr = dict(ldr)
             if j.get("role"):
-                ldr = dict(ldr)
                 ldr["role"] = j["role"]
             if j.get("status") in ("current", "historical"):
                 ldr["status"] = j["status"]
                 ldr["is_current"] = j["status"] == "current"
-        leaders.append(ldr)
+            leaders.append(ldr)
 
     # If judge listed a current CEO not in the scrape list, add only when Wikidata/evidence agrees
     existing_keys = {(l.get("name") or "").lower() for l in leaders}
-    for row in verdict.get("leadership") or []:
-        if not isinstance(row, dict) or row.get("keep") is False:
-            continue
-        name = (row.get("name") or "").strip()
-        key = name.lower()
-        if not name or key in existing_keys:
-            continue
-        if row.get("status") != "current":
-            continue
-        # Only inject if Wikidata named them
-        wd_names = {(n or "").lower() for n in (
-            (scraped.get("_wikidata") or {}).get("ceo") or []
-        ) + ((scraped.get("_wikidata") or {}).get("chair") or [])}
-        if key not in wd_names:
-            continue
-        leaders.append({
-            "name": name,
-            "role": row.get("role") or "CEO",
-            "source": (scraped.get("_wikidata") or {}).get("source_url") or "Wikidata",
-            "confidence": "High",
-            "background": "Wikidata structured claim (current)",
-            "status": "current",
-            "is_current": True,
-            "provenance": "wikidata",
-        })
-        existing_keys.add(key)
+    if judge_available:
+        for row in verdict.get("leadership") or []:
+            if not isinstance(row, dict) or row.get("keep") is False:
+                continue
+            name = (row.get("name") or "").strip()
+            key = name.lower()
+            if not name or key in existing_keys:
+                continue
+            if row.get("status") != "current":
+                continue
+            # Only inject a judge-approved officer when Wikidata independently
+            # names the same person for this exact company.
+            wd_names = {(n or "").lower() for n in (
+                (scraped.get("_wikidata") or {}).get("ceo") or []
+            ) + ((scraped.get("_wikidata") or {}).get("chair") or [])}
+            if key not in wd_names:
+                continue
+            leaders.append({
+                "name": name,
+                "role": row.get("role") or "CEO",
+                "source": (scraped.get("_wikidata") or {}).get("source_url") or "Wikidata",
+                "confidence": "High",
+                "background": "Wikidata structured claim (current)",
+                "status": "current",
+                "is_current": True,
+                "provenance": "wikidata",
+            })
+            existing_keys.add(key)
 
     report["leadership_team"] = auth.rank_leadership(leaders)
     for k in ("cin", "mca_status", "authorized_capital", "paid_up_capital", "zaubacorp_url"):
@@ -4686,8 +5181,15 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
         "poc_name": verdict.get("poc_name") or "",
         "poc_title": verdict.get("poc_title") or "",
         "provider": "azure/llm-judge",
+        "status": "verified" if judge_available else "unavailable",
         "summary": verdict.get("summary") or "",
     }
+    if not judge_available:
+        # Do not quietly present sensitive people/competitor facts when the
+        # required verification call could not run.
+        ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+        ma["market_position"] = _field("Not publicly available", "Judge unavailable", "Low")
+        report["market_analysis"] = ma
     return report
 
 
@@ -5231,7 +5733,7 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
 
 
 def _job_board_slugs(company_name: str, domain: str) -> list[str]:
-    stem = (domain or "").split(".")[0].lower()
+    stem = _domain_stem(domain)
     raw = re.sub(r"[^a-z0-9]+", "-", (company_name or "").lower()).strip("-")
     raw = re.sub(
         r"-(inc|ltd|llc|limited|corp|corporation|pvt|private|company|co)$", "", raw
@@ -5245,21 +5747,11 @@ def _job_board_slugs(company_name: str, domain: str) -> list[str]:
 
 
 def _canonical_hiring_urls(company_name: str, domain: str, scraped: dict | None = None) -> list[dict]:
-    """Clickable employer pages on official careers, LinkedIn, Naukri, Indeed."""
-    slugs = _job_board_slugs(company_name, domain)
-    primary = slugs[0] if slugs else "company"
-    brand = re.sub(r"[^A-Za-z0-9]+", "-", (company_name or primary).strip()).strip("-") or primary
-    brand = re.split(r"-", brand, maxsplit=1)[0]
+    """Return only employer pages that were actually discovered on the site."""
     careers = ((scraped or {}).get("_page_urls") or {}).get("careers_text") or ""
     rows = []
     if careers:
         rows.append((f"Careers at {company_name}", careers, "Official Careers"))
-    rows.append((f"Careers at {company_name}", f"https://{domain}/careers", "Official Careers"))
-    rows.append((f"Jobs at {company_name}", f"https://jobs.{domain}", "Official Careers"))
-    for slug in slugs[:2]:
-        rows.append((f"{company_name} on LinkedIn", f"https://www.linkedin.com/company/{slug}/jobs/", "LinkedIn"))
-        rows.append((f"{company_name} on Naukri", f"https://www.naukri.com/{slug}-jobs", "Naukri"))
-    rows.append((f"{company_name} on Indeed", f"https://www.indeed.com/cmp/{brand}/jobs", "Indeed"))
     out, seen = [], set()
     for role, url, platform in rows:
         key = url.lower().rstrip("/")
@@ -5323,6 +5815,34 @@ Rules:
             "snippet": f"Public hiring for {company_name}",
         })
     return rows[:8]
+
+
+def _judge_hiring_rows(company_name: str, domain: str, rows: list) -> list:
+    """Validate hiring rows without erasing them when the judge is unavailable."""
+    rows = [row for row in (rows or []) if isinstance(row, dict)]
+    if not rows:
+        return []
+    try:
+        from backend.services import llm_judge
+        verdict = llm_judge.judge_hiring_signals(
+            company_name=company_name, domain=domain, signals=rows
+        )
+        if verdict.get("_error"):
+            print("[Research] Hiring judge unavailable; keeping source-filtered signals")
+            return rows
+
+        def _hire_url_key(value: str) -> str:
+            parsed = urlparse(value or "")
+            return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/").lower()
+
+        keep_urls = {_hire_url_key(u) for u in (verdict.get("keep_urls") or [])}
+        return [
+            row for row in rows
+            if _hire_url_key(row.get("source_url") or "") in keep_urls
+        ]
+    except Exception as e:
+        print(f"[Research] Hiring judge unavailable; keeping source-filtered signals: {e}")
+        return rows
 
 
 def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = "",
@@ -5411,29 +5931,11 @@ def _fetch_hiring_signals(company_name: str, domain: str, careers_text: str = ""
         if extra and not kept:
             kept = auth.filter_hiring_signals(extra, company_name, domain) or extra[:4]
 
-    _SAFE_HIRE = {
-        "official_careers", "linkedin_company_jobs", "naukri", "indeed",
-        "ats", "glassdoor", "job_board",
-    }
-    needs_judge = kept and any((h.get("authenticity") or "") not in _SAFE_HIRE for h in kept)
-    if needs_judge:
-        try:
-            from backend.services import llm_judge
-            verdict = llm_judge.judge_hiring_signals(
-                company_name=company_name, domain=domain, signals=kept
-            )
-            keep_urls = {u.rstrip("/").lower() for u in (verdict.get("keep_urls") or [])}
-            if keep_urls:
-                judged = []
-                for h in kept:
-                    href = (h.get("source_url") or "").rstrip("/").lower()
-                    kind = h.get("authenticity") or ""
-                    if href in keep_urls or kind in _SAFE_HIRE:
-                        judged.append(h)
-                if judged:
-                    kept = judged
-        except Exception as e:
-            print(f"[Research] Hiring judge skipped: {e}")
+    # In fast mode the source/domain filter is sufficient for the interactive
+    # result.  Deep mode adds the employer judge, but a temporary model failure
+    # must not hide real official/company job pages.
+    if not RESEARCH_SKIP_JUDGE:
+        kept = _judge_hiring_rows(company_name, domain, kept)
 
     print("[Research] Hiring kept " + str(len(kept)) + " pages: "
           + ", ".join(sorted({h.get("platform") or "?" for h in kept})))
@@ -5473,6 +5975,27 @@ Return ONLY JSON: {{"ai_conclusion": "one sentence", "signals_used": ["role", ..
     return base
 
 
+def _has_target_evidence(scraped: dict, wiki: dict, wikidata: dict) -> bool:
+    """Require at least one real public signal before synthesising a report."""
+    scraped = scraped or {}
+    if scraped.get("_site_parked"):
+        return False
+    site_fields = (
+        "title", "description", "homepage_text", "about_text", "products_text",
+        "careers_text", "leadership_text", "pricing_text", "blog_text",
+    )
+    if any(str(scraped.get(key) or "").strip() for key in site_fields):
+        return True
+    # A real server may block datacenter scraping with 403/429. Do not confuse
+    # that with a nonexistent domain; the report will retain low-confidence
+    # fields rather than inventing content from an unreachable host.
+    if scraped.get("_homepage_reachable"):
+        return True
+    if (wiki or {}).get("text") or (wiki or {}).get("summary"):
+        return True
+    return bool((wikidata or {}).get("matched"))
+
+
 def run(url: str) -> dict:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
@@ -5500,6 +6023,10 @@ def run(url: str) -> dict:
     if wiki.get("title"):
         scraped["preferred_display_name"] = wiki["title"]
     scraped["_wikidata"] = wd
+    if not _has_target_evidence(scraped, wiki, wd):
+        raise ValueError(
+            "Could not verify this target website. The domain returned no public company evidence."
+        )
     print(f"[Research] Phase 1 done in {time.time()-t0:.1f}s")
 
     title = scraped.get("title", "")
@@ -5705,10 +6232,11 @@ def run(url: str) -> dict:
         if isinstance(report.get("company_profile"), dict):
             report["company_profile"]["name"] = company_name
 
-    # LLM-as-judge final gate — optional in fast mode (saves 15–40s)
+    # The report judge is deliberately optional in fast mode.  Keep the
+    # full normalized model/site report available for the normal UI request;
+    # deep mode retains the stricter authenticity gate.
     if RESEARCH_SKIP_JUDGE:
         print("[Research] Phase 3b: LLM judge skipped (fast mode)")
-        # Still drop MCA/junk leadership + illogical market position
         ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
         cur = ma.get("market_position")
         cur_val = cur.get("value") if isinstance(cur, dict) else cur
@@ -5723,13 +6251,15 @@ def run(url: str) -> dict:
         if isinstance(report.get("company_profile"), dict):
             report["company_profile"]["name"] = company_name
     else:
-        print("[Research] Phase 3b: LLM-as-judge (Groq) validating report...")
+        print("[Research] Phase 3b: LLM-as-judge validating report...")
         report = _apply_llm_judge(report, scraped, company_name, url)
         if isinstance(report.get("company_profile"), dict) and report["company_profile"].get("name"):
             company_name = _anchor_company_name(report["company_profile"]["name"], domain, scraped)
             report["company_profile"]["name"] = company_name
 
-    # After judge: keep judged leadership. Do NOT re-inject people the judge dropped.
+    # Apply the final source/registry hygiene in both modes.  In fast mode this
+    # preserves the already-normalized public leadership list; in deep mode it
+    # preserves the judge-approved list.
     report["registry_intelligence"] = {
         "source": "disabled",
         "confidence": "Low",
@@ -5750,8 +6280,9 @@ def run(url: str) -> dict:
         and "cin" not in str(l.get("source") or "").lower()
         and not l.get("din")
     ]
-    if not post_leaders:
-        # Judge emptied the list — restore only Wikidata current officers
+    if not post_leaders and not RESEARCH_SKIP_JUDGE:
+        # Judge emptied the list — restore only independently structured current
+        # officers, never registry/MCA rows.
         post_leaders = wikidata_client.leaders_from_wikidata(wd)
     report["leadership_team"] = auth.rank_leadership(
         _normalize_leadership_list(post_leaders, company_name, scraped)
@@ -5759,6 +6290,15 @@ def run(url: str) -> dict:
     if isinstance(report.get("company_profile"), dict):
         for k in ("cin", "mca_status", "authorized_capital", "paid_up_capital", "zaubacorp_url"):
             report["company_profile"].pop(k, None)
+
+    # If the public site, structured data and judged leadership still contain
+    # no usable contact, make one bounded public-knowledge attempt.  The
+    # candidate is never attached directly: _maybe_add_public_point_of_contact
+    # runs a separate evidence-backed judge and only attaches its sanitized
+    # decision.
+    report = _maybe_add_public_point_of_contact(
+        report, company_name, domain, scraped, intel
+    )
 
     # Final identity hard-lock (blocked scrapes / judge drift)
     company_name = _anchor_company_name(company_name, domain, scraped)
@@ -5792,28 +6332,15 @@ def run(url: str) -> dict:
         if not profile_fill:
             print("[Research] Public-profile fill for missing hiring status")
             profile_fill = _llm_public_profile_fill(company_name, domain, scraped, merged_leaders)
-            merged_leaders = profile_fill.get("leaders") or merged_leaders
-            report["leadership_team"] = auth.rank_leadership(
-                _normalize_leadership_list(merged_leaders, company_name, scraped)
-            )
+            # The leadership gate has already run. This fill is used only for
+            # hiring URLs here; it must not re-inject unjudged people.
     fill_hire = list((profile_fill or {}).get("hiring") or [])
     if fill_hire:
         combined = list(hiring or []) + fill_hire
         filtered = auth.filter_hiring_signals(combined, company_name, domain)
-        if filtered:
-            hiring = filtered
-        else:
-            hiring = []
-            for row in fill_hire:
-                href = str(row.get("source_url") or "")
-                if not href.startswith("http"):
-                    continue
-                rec = dict(row)
-                rec["verified_employer"] = True
-                rec["authenticity"] = "official_careers"
-                rec["platform"] = rec.get("platform") or "Official Careers"
-                hiring.append(rec)
-                break
+        # Fast mode keeps the same source-filtered fill as the main hiring path;
+        # deep mode applies the employer judge with a fail-soft fallback.
+        hiring = _judge_hiring_rows(company_name, domain, filtered) if not RESEARCH_SKIP_JUDGE else filtered
     print(f"[Research] Phase 4 done in {time.time()-t0:.1f}s")
     uniq_hire, seen_keys = [], set()
     for h in hiring or []:
@@ -5874,6 +6401,8 @@ def run(url: str) -> dict:
         )
     for cp in (scraped.get("contact_data") or {}).get("source_pages", []):
         _add_cite("Contact / Footer", cp, "Contact")
+    for contact_url in ((report.get("contact_intelligence") or {}).get("public_point_of_contact") or {}).get("source_urls", []):
+        _add_cite("Public contact evidence", contact_url, "Public Web")
     for sl in scraped.get("social_links", [])[:8]:
         if auth.host_is_social(sl):
             _add_cite(urlparse(sl).netloc.replace("www.", ""), sl, "Social Media")
@@ -5998,6 +6527,13 @@ def run(url: str) -> dict:
         "generated_at": time.strftime("%Y-%m-%d %H:%M UTC"),
         "elapsed_seconds": round(time.time() - t_all, 1),
         "fast_mode": RESEARCH_FAST,
+        "judge_required": not RESEARCH_SKIP_JUDGE,
+        "judge_status": (
+            "skipped" if RESEARCH_SKIP_JUDGE
+            else (report.get("_judge") or {}).get("status", "unavailable")
+        ),
+        "public_contact_status": (report.get("_contact_verification") or {}).get("status", "unavailable"),
+        "public_contact_sources": (report.get("_contact_verification") or {}).get("source_urls", []),
     }
     report["intelligence_score"] = auth.compute_honest_scores(
         report, citations=citations, judge_quality=judge_q
