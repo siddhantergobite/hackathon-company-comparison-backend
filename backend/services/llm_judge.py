@@ -301,6 +301,303 @@ RULES:
         }
 
 
+def judge_ai_profile(
+    *,
+    website_url: str,
+    domain: str,
+    company_name: str,
+    candidate: dict,
+    evidence: list[dict],
+    existing_leaders: Optional[list] = None,
+) -> dict:
+    """Judge the dedicated AI knowledge fallback at fact level.
+
+    The normal report judge is intentionally conservative and only sees the
+    main report snapshot.  This pass is different: it receives the candidate
+    generated from model knowledge plus the crawler's exact public snippets and
+    labels every retained fact as either evidence-backed or model-knowledge
+    reviewed.  Email and phone values remain literal-evidence-only.
+    """
+    candidate = candidate if isinstance(candidate, dict) else {}
+    rows = []
+    allowed_urls = set()
+    for row in (evidence or [])[:36]:
+        if not isinstance(row, dict):
+            continue
+        href = str(row.get("url") or "").strip()
+        if not href.startswith(("http://", "https://")):
+            continue
+        low = href.lower()
+        if any(x in low for x in ("chatgpt.com", "chat.openai.com", "openai.com/chat", "/login", "/signin")):
+            continue
+        allowed_urls.add(href)
+        rows.append({
+            "url": href,
+            "title": str(row.get("title") or "")[:180],
+            "source": str(row.get("source") or "Public web")[:100],
+            "snippet": str(row.get("snippet") or row.get("text") or "")[:900],
+        })
+
+    evidence_text = "\n".join(
+        f"{r['title']} {r['snippet']} {r['url']}" for r in rows
+    ).lower()
+    existing = [
+        {"name": l.get("name"), "role": l.get("role"), "status": l.get("status")}
+        for l in (existing_leaders or [])[:8]
+        if isinstance(l, dict) and l.get("name")
+    ]
+
+    prompt = f"""You are a second-pass fact judge for a company-intelligence product.
+
+The first model produced a candidate profile using public web evidence and its
+general knowledge.  Judge each claim for THIS exact company, not a similarly
+named company or a subsidiary.  You may keep a well-known public executive from
+model knowledge when the identity and role are strongly consistent, but label it
+model-knowledge-reviewed rather than verified.  A model answer is never a source.
+
+COMPANY
+- name: {company_name}
+- website: {website_url}
+- domain: {domain}
+
+EXISTING EVIDENCE
+{json.dumps(rows, ensure_ascii=False)[:12000] or "[]"}
+
+EXISTING LEADERS (context)
+{json.dumps(existing, ensure_ascii=False)[:1800]}
+
+CANDIDATE PROFILE
+{json.dumps(candidate, ensure_ascii=False)[:7000]}
+
+RULES
+1. Keep current CEO, CTO, COO, CFO, President, Chair, Founder/Co-founder,
+   Managing Director, or another named senior leader only for this exact company.
+2. Founders may be historical; do not turn a historical founder into a current
+   operating executive or point of contact.
+3. A name/title not literally present in the evidence may still be retained only
+   as model-knowledge-reviewed when it is a well-known public fact and the
+   company identity is unambiguous. Use Medium confidence at most in that case.
+4. Keep email or phone ONLY when the exact value appears in the evidence. Never
+   infer an address pattern, guess a number, or reveal private contact details.
+5. A point of contact must be a current operating executive or an explicitly
+   public business contact. Prefer a current leader over a historical founder.
+6. Headquarters and founding year may use model knowledge only when the company
+   identity is unambiguous; mark those facts model-knowledge-reviewed.
+7. Drop unsupported, low-confidence, wrong-company, duplicate, and page-chrome
+   claims. Prefer an empty value to a confident error.
+
+Return ONLY JSON:
+{{
+  "overall_score": 0,
+  "summary": "one short sentence explaining what was kept and what remains unverified",
+  "leadership": [{{
+    "name": "Full Name",
+    "role": "CEO",
+    "status": "current|historical",
+    "keep": true,
+    "confidence": "High|Medium|Low",
+    "verification_status": "evidence-verified|model-knowledge-reviewed",
+    "source_urls": ["exact URLs from EXISTING EVIDENCE"],
+    "reason": "short reason"
+  }}],
+  "point_of_contact": {{
+    "keep": true,
+    "name": "",
+    "title": "",
+    "email": "",
+    "phone": "",
+    "confidence": "High|Medium|Low",
+    "verification_status": "evidence-verified|model-knowledge-reviewed",
+    "source_urls": [],
+    "reason": "short reason"
+  }},
+  "headquarters": {{
+    "keep": true,
+    "value": "city, country",
+    "confidence": "High|Medium|Low",
+    "verification_status": "evidence-verified|model-knowledge-reviewed",
+    "source_urls": [],
+    "reason": "short reason"
+  }},
+  "founded": {{
+    "keep": true,
+    "value": "YYYY",
+    "confidence": "High|Medium|Low",
+    "verification_status": "evidence-verified|model-knowledge-reviewed",
+    "source_urls": [],
+    "reason": "short reason"
+  }}
+}}
+"""
+
+    try:
+        raw = llm_client.chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return valid JSON only. Be strict about company identity. "
+                        "Never invent emails or phones. Separate evidence from model knowledge."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=2600,
+            json_mode=True,
+            timeout=90.0,
+            reasoning_effort="low",
+        )
+        data = _parse_json(raw)
+    except Exception as e:
+        print(f"[Judge] AI profile judge failed: {e}")
+        return {
+            "overall_score": 0,
+            "summary": "AI profile judge unavailable; no fallback facts were promoted.",
+            "leadership": [],
+            "point_of_contact": {},
+            "headquarters": {},
+            "founded": {},
+            "_judge_available": False,
+            "_error": str(e),
+        }
+
+    def _score(value, default=0):
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return default
+        if 0 < n <= 1:
+            n *= 100
+        return max(0, min(100, int(round(n))))
+
+    def _confidence(value):
+        value = str(value or "Medium").strip().title()
+        return value if value in {"High", "Medium", "Low"} else "Medium"
+
+    def _urls(value):
+        return [u for u in (value or []) if isinstance(u, str) and u in allowed_urls][:4]
+
+    def _keep(value) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() not in {"", "0", "false", "no", "reject", "drop"}
+        return bool(value)
+
+    def _evidence_urls_for(name):
+        needle = str(name or "").strip().lower()
+        if not needle:
+            return []
+        return [r["url"] for r in rows if needle in f"{r['title']} {r['snippet']}".lower()][:3]
+
+    leaders = []
+    for row in data.get("leadership") or []:
+        if not isinstance(row, dict) or not _keep(row.get("keep")):
+            continue
+        name = re.sub(r"\s+", " ", str(row.get("name") or "")).strip(" ,;.")
+        role = re.sub(r"\s+", " ", str(row.get("role") or "Leadership")).strip(" ,;.")
+        if not name or len(name.split()) < 2 or len(name) > 90 or len(role) > 90:
+            continue
+        confidence = _confidence(row.get("confidence"))
+        score = _score(row.get("score"), 65 if confidence != "Low" else 35)
+        if confidence == "Low" or score < 55:
+            continue
+        urls = _urls(row.get("source_urls"))
+        evidence_hit = name.lower() in evidence_text
+        status = str(row.get("verification_status") or "").strip().lower()
+        if evidence_hit:
+            status = "evidence-verified"
+            urls = urls or _evidence_urls_for(name)
+        else:
+            status = "model-knowledge-reviewed"
+            confidence = "Medium" if confidence == "High" else confidence
+        if not evidence_hit and status == "evidence-verified":
+            status = "model-knowledge-reviewed"
+        leaders.append({
+            "name": name,
+            "role": role,
+            "status": "historical" if str(row.get("status") or "").lower() == "historical" else "current",
+            "confidence": confidence,
+            "verification_status": status,
+            "verification_score": score,
+            "source_urls": urls,
+            "reason": str(row.get("reason") or "Reviewed by the AI profile judge")[:260],
+        })
+
+    poc = data.get("point_of_contact") or data.get("poc") or {}
+    if not isinstance(poc, dict) or not _keep(poc.get("keep")):
+        poc = {}
+    else:
+        name = re.sub(r"\s+", " ", str(poc.get("name") or "")).strip(" ,;.")
+        title = re.sub(r"\s+", " ", str(poc.get("title") or "")).strip(" ,;.")
+        email = str(poc.get("email") or "").strip().lower()
+        phone = str(poc.get("phone") or "").strip()
+        urls = _urls(poc.get("source_urls"))
+        if email and email not in evidence_text:
+            email = ""
+        phone_digits = re.sub(r"\D", "", phone)
+        if phone and (not phone_digits or phone_digits not in re.sub(r"\D", "", evidence_text)):
+            phone = ""
+        evidence_hit = bool(name and name.lower() in evidence_text)
+        leader_names = {l["name"].lower() for l in leaders if l.get("status") == "current"}
+        if not evidence_hit and name.lower() not in leader_names:
+            poc = {}
+        else:
+            conf = _confidence(poc.get("confidence"))
+            score = _score(poc.get("score"), 65 if conf != "Low" else 35)
+            if conf == "Low" or score < 55 or not (name or email or phone):
+                poc = {}
+            else:
+                status = "evidence-verified" if evidence_hit else "model-knowledge-reviewed"
+                if status != "evidence-verified":
+                    conf = "Medium" if conf == "High" else conf
+                poc = {
+                    "name": name,
+                    "title": title,
+                    "email": email,
+                    "phone": phone,
+                    "confidence": conf,
+                    "verification_status": status,
+                    "verification_score": score,
+                    "source_urls": urls or _evidence_urls_for(name),
+                    "reason": str(poc.get("reason") or "Reviewed by the AI profile judge")[:260],
+                }
+
+    def _fact(value):
+        if not isinstance(value, dict) or not _keep(value.get("keep")):
+            return {}
+        text = re.sub(r"\s+", " ", str(value.get("value") or "")).strip(" ,;")
+        if not text or len(text) > 180:
+            return {}
+        conf = _confidence(value.get("confidence"))
+        score = _score(value.get("score"), 65 if conf != "Low" else 35)
+        if conf == "Low" or score < 55:
+            return {}
+        status = str(value.get("verification_status") or "").strip().lower()
+        status = status if status in {"evidence-verified", "model-knowledge-reviewed"} else "model-knowledge-reviewed"
+        if status == "evidence-verified" and text.lower() not in evidence_text:
+            status = "model-knowledge-reviewed"
+            conf = "Medium" if conf == "High" else conf
+        return {
+            "value": text,
+            "confidence": conf,
+            "verification_status": status,
+            "verification_score": score,
+            "source_urls": _urls(value.get("source_urls")),
+            "reason": str(value.get("reason") or "Reviewed by the AI profile judge")[:260],
+        }
+
+    score = _score(data.get("overall_score") or data.get("quality_score"), 0)
+    return {
+        "overall_score": score,
+        "summary": str(data.get("summary") or "AI profile facts were reviewed for company identity and evidence.")[:500],
+        "leadership": leaders[:10],
+        "point_of_contact": poc,
+        "headquarters": _fact(data.get("headquarters")),
+        "founded": _fact(data.get("founded")),
+        "_judge_available": True,
+    }
+
+
 def judge_hiring_signals(
     *,
     company_name: str,

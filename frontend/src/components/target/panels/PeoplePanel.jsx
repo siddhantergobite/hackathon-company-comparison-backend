@@ -2,15 +2,33 @@ import { IntelRow, LeaderPerson } from '../../ui';
 import { asArray, ensureUrl, val } from '../../../utils/data';
 
 const confidenceTone = (c) => ({ high: 'high', medium: 'medium', med: 'medium', low: 'low' })[String(c || 'medium').toLowerCase()] || '';
+const verificationLabel = (leader) =>
+  leader?.verification_status === 'model-knowledge-reviewed'
+    ? 'AI knowledge reviewed'
+    : leader?.verification_status === 'evidence-verified'
+      ? 'Evidence verified'
+      : '';
 
 export default function PeoplePanel({ report }) {
   const co = report.company_profile || {};
   const emp = report.employee_insights || {};
   const leaders = asArray(report.leadership_team);
   const hiring = asArray(report.hiring_signals).filter((h) => h && h.role);
+  const ai = report.ai_enrichment || {};
 
   return (
     <>
+      {ai.status && ai.status !== 'disabled' && (
+        <div className="callout ai-profile-callout">
+          <strong>AI profile enrichment</strong>
+          <p className="text-sm muted" style={{ marginTop: 6 }}>
+            {ai.summary || 'Missing leadership and contact fields were checked by a separate AI judge.'}
+          </p>
+          <p className="text-xs muted" style={{ marginTop: 6 }}>
+            Judge score: {ai.judge_score || 0}/100 - {ai.evidence_count || 0} public evidence records. AI-knowledge facts are labeled.
+          </p>
+        </div>
+      )}
       <h4 className="subhead">Workforce stats</h4>
       <IntelRow label="Total employees" field={emp.total_employees || co.employee_count || co.employees} />
       <IntelRow label="Hiring trend" field={emp.hiring_trend} />
@@ -27,6 +45,7 @@ export default function PeoplePanel({ report }) {
               <span className="cite-badge" style={{ marginLeft: l.din ? 6 : 0 }}>
                 {l.source || 'Public source'}
               </span>
+              {verificationLabel(l) && <span className="cite-badge">{verificationLabel(l)}</span>}
               <span className={`cite-badge cite-badge--${confidenceTone(l.confidence)}`}>● {l.confidence || 'Medium'}</span>
             </div>
             {l.background && <p className="text-xs muted" style={{ marginTop: 6 }}>{l.background}</p>}

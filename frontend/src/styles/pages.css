@@ -256,6 +256,12 @@
   font-size: 14px;
 }
 
+.ai-profile-callout {
+  margin-bottom: 18px;
+  border-left-color: var(--info);
+  background: var(--info-soft);
+}
+
 /* ---------- Pitch ---------- */
 .match-head {
   display: flex;
@@ -277,14 +283,57 @@
   color: var(--text-2);
 }
 
+.match-table {
+  border: 1px solid #9ca6b7;
+  border-collapse: collapse;
+}
+.match-table th,
+.match-table td {
+  border: 1px solid #aab2c0;
+}
+.match-table th {
+  padding-top: 13px;
+  padding-bottom: 13px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #0b1220;
+  background: #f4f6fb;
+  border-bottom: 2px solid #7f8a9e;
+}
+.match-table td {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.match-table tr:last-child td {
+  border-bottom: 1px solid #9ca6b7;
+}
+.match-table th:nth-child(1),
+.match-table td:nth-child(1) {
+  width: 31%;
+}
+.match-table th:nth-child(2),
+.match-table td:nth-child(2) {
+  width: 57%;
+}
+.match-table th:nth-child(3),
+.match-table td:nth-child(3) {
+  width: 12%;
+}
+.match-table .fit-cell {
+  color: #070d18;
+  font-size: 15.5px;
+  font-weight: 800;
+}
+
 .email {
   overflow: hidden;
 }
 .email__meta {
   padding: 14px 22px;
   background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-  font-size: 13.5px;
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 14px;
 }
 .email__row {
   display: flex;
@@ -294,13 +343,17 @@
 .email__row dt {
   width: 66px;
   flex-shrink: 0;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-weight: 700;
+  color: var(--text);
 }
 .email__row dd {
   margin: 0;
   min-width: 0;
+  color: var(--text);
   overflow-wrap: anywhere;
+}
+.email__subject {
+  font-weight: 700;
 }
 .email__body {
   padding: 24px 26px;

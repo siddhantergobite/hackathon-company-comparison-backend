@@ -30,20 +30,25 @@ MODEL = (
     )
 )
 
-# Production default is the fast authentic path (~30–70s).
-# Set RESEARCH_DEEP=1 when you want the broader multi-minute discovery sweep.
-RESEARCH_DEEP = os.getenv("RESEARCH_DEEP", "0").strip().lower() not in ("0", "false", "no", "off")
+# Deep mode is the production default so the report searches broadly enough to
+# find leadership, points of contact, and public evidence beyond the homepage.
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+RESEARCH_DEEP = _env_flag("RESEARCH_DEEP", True)
 RESEARCH_FAST = not RESEARCH_DEEP
-# Fast mode is the normal interactive path.  Keep the broad, useful report
-# produced by the main research model in that path; the slower deep mode still
-# runs the stricter report judge before returning.  This was the original
-# behavior and avoids turning a transient judge response into an almost-empty
-# report.
-RESEARCH_SKIP_JUDGE = not RESEARCH_DEEP
-RESEARCH_SKIP_HIRING_SEARCH = True if not RESEARCH_DEEP else False
-# Model-assisted gap-fill for leadership/HQ when the site scrape finds nothing.
-# Runs in fast mode too: an empty leadership panel is worse than a short extra call.
-RESEARCH_LLM_ENRICH = os.getenv("RESEARCH_LLM_ENRICH", "1").strip().lower() not in ("0", "false", "no", "off")
+# The report judge remains enabled by default. Set the skip flag only when a
+# deliberately faster, less-validated response is needed.
+RESEARCH_SKIP_JUDGE = _env_flag("RESEARCH_SKIP_JUDGE", False)
+RESEARCH_SKIP_HIRING_SEARCH = _env_flag("RESEARCH_SKIP_HIRING_SEARCH", False)
+# Model-assisted gap-fill for leadership, company identity, and contacts when
+# the site scrape finds nothing. Every retained fact gets a visible status.
+RESEARCH_LLM_ENRICH = _env_flag("RESEARCH_LLM_ENRICH", True)
+RESEARCH_AI_PROFILE_FALLBACK = _env_flag("RESEARCH_AI_PROFILE_FALLBACK", True)
 
 # ZaubaCorp / Indian MCA / CIN — fully OFF (user requested remove CIN completely).
 # Research uses website + global public web only (pre-CIN behavior).
@@ -3496,6 +3501,403 @@ def _build_site_evidence_blob(company_name: str, domain: str, scraped: dict) -> 
     return "\n".join(p for p in parts if p and str(p).strip())[:7000]
 
 
+def _ai_profile_evidence(
+    company_name: str,
+    domain: str,
+    scraped: dict | None = None,
+    intel: dict | None = None,
+) -> list[dict]:
+    """Build a broader, URL-preserving evidence set for people/contact fill.
+
+    The normal report prompt is intentionally compact.  This pass keeps the
+    exact result URL and snippet for leadership/contact queries so the model
+    can distinguish a real public profile from a similarly named company.
+    """
+    scraped = scraped or {}
+    intel = intel or {}
+    records: list[dict] = []
+    seen: set[str] = set()
+    blocked = ("chatgpt.com", "chat.openai.com", "openai.com/chat", "accounts.google", "login.microsoftonline")
+
+    def _same_company(href: str) -> bool:
+        try:
+            host = urlparse(href).netloc.lower().replace("www.", "")
+        except Exception:
+            return False
+        base = (domain or "").lower().replace("www.", "")
+        return bool(base and (host == base or host.endswith("." + base)))
+
+    def _add(href: str, title: str, snippet: str, source: str = "Public web") -> None:
+        href = str(href or "").strip()
+        if not href.startswith(("http://", "https://")) or any(x in href.lower() for x in blocked):
+            return
+        if auth.is_junk_citation(href):
+            return
+        title = re.sub(r"\s+", " ", str(title or "")).strip()
+        snippet = re.sub(r"\s+", " ", str(snippet or "")).strip()
+        if not title and not snippet:
+            return
+        if not _same_company(href) and not _blob_matches_brand(f"{title} {snippet}", company_name, domain):
+            return
+        key = href.rstrip("/").lower()
+        if key in seen:
+            return
+        seen.add(key)
+        records.append({
+            "url": href,
+            "title": title[:180],
+            "snippet": snippet[:1000],
+            "source": (source or auth.classify_source(href, domain))[:100],
+        })
+
+    structured = scraped.get("_structured") or {}
+    page_urls = scraped.get("_page_urls") or {}
+    for key, label in (
+        ("leadership_text", "Company leadership page"),
+        ("about_text", "Company about page"),
+        ("homepage_text", "Company website"),
+        ("careers_text", "Company careers page"),
+    ):
+        text_value = structured.get(key) or scraped.get(key) or ""
+        if text_value:
+            _add(page_urls.get(key) or f"https://{domain}/", label, text_value[:2600], "Company Website")
+
+    contact = scraped.get("contact_data") or {}
+    contact_url = (contact.get("source_pages") or [f"https://{domain}/"])[0]
+    for item in (contact.get("emails") or [])[:12]:
+        if isinstance(item, dict) and item.get("email"):
+            _add(
+                contact_url,
+                "Public company contact page",
+                f"Email: {item.get('email')} {item.get('person') or item.get('person_name') or ''}",
+                "Company Website",
+            )
+    for item in (contact.get("phones") or [])[:12]:
+        if isinstance(item, dict) and item.get("number"):
+            _add(
+                contact_url,
+                "Public company contact page",
+                f"Phone: {item.get('number')} {item.get('person') or item.get('person_name') or ''}",
+                "Company Website",
+            )
+
+    wiki_url = scraped.get("wikipedia_url") or ""
+    wiki_text = scraped.get("wikipedia_summary") or scraped.get("wikipedia_text") or ""
+    if wiki_url and wiki_text:
+        _add(wiki_url, "Wikipedia", wiki_text[:2200], "Wikipedia")
+
+    wd = scraped.get("_wikidata") or intel.get("_wikidata") or {}
+    if wd.get("source_url"):
+        _add(
+            wd["source_url"],
+            "Wikidata company record",
+            f"CEO: {', '.join(wd.get('ceo') or [])}; chair: {', '.join(wd.get('chair') or [])}; "
+            f"founders: {', '.join(wd.get('founders') or [])}; HQ: {wd.get('headquarters') or ''}",
+            "Wikidata",
+        )
+
+    for page in (intel.get("_scraped_pages") or [])[:12]:
+        _add(
+            page.get("url") or "",
+            page.get("title") or page.get("domain") or "Public company profile",
+            page.get("text") or page.get("snippet") or "",
+            page.get("category") or "Public web",
+        )
+
+    queries = [
+        f'"{company_name}" CEO',
+        f'"{company_name}" CTO OR "chief technology officer"',
+        f'"{company_name}" founder OR cofounder OR "co-founder"',
+        f'"{company_name}" leadership OR management OR executives',
+        f'"{company_name}" "point of contact" OR "business contact"',
+        f'"{company_name}" email OR phone',
+        f'"{company_name}" headquarters OR "head office" OR "corporate office"',
+        f'"{company_name}" founded OR established OR "founded in"',
+        f'site:linkedin.com/company "{company_name}"',
+        f'site:linkedin.com/in "{company_name}" CEO OR CTO OR founder',
+        f'site:theorg.com "{company_name}"',
+        f'"{company_name}" current director OR president',
+    ]
+    if not RESEARCH_DEEP:
+        queries = queries[:8]
+
+    def _search(query: str) -> list:
+        try:
+            return _ddg_search(query, max_results=5)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Research] AI profile search failed for '{query}': {exc}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=min(6, len(queries))) as pool:
+        for query, query_rows in zip(queries, pool.map(_search, queries)):
+            for row in query_rows or []:
+                if not isinstance(row, dict):
+                    continue
+                href = row.get("href") or row.get("link") or ""
+                _add(
+                    href,
+                    row.get("title") or "Public search result",
+                    f"{row.get('body') or row.get('snippet') or ''} Search query: {query}",
+                    auth.classify_source(href, domain) if href else "Public Web",
+                )
+
+    records.sort(key=lambda r: (0 if _same_company(r.get("url") or "") else 1, r.get("url") or ""))
+    return records[:40]
+
+
+def _run_ai_profile_fallback(
+    report: dict,
+    company_name: str,
+    domain: str,
+    scraped: dict,
+    intel: dict,
+) -> dict:
+    """Fill missing people/contact facts, then attach judge metadata.
+
+    Model-knowledge facts are deliberately not disguised as website facts.  A
+    user can see them, but the UI receives the verification status and score so
+    outreach decisions remain reviewable.
+    """
+    from backend.services import llm_judge
+
+    base_result = {
+        "status": "unavailable",
+        "provider": "AI public-knowledge profile + LLM judge",
+        "judge_score": 0,
+        "summary": "AI profile enrichment was not available.",
+        "evidence_count": 0,
+        "source_urls": [],
+        "leaders_added": 0,
+        "point_of_contact": {},
+    }
+    if not RESEARCH_AI_PROFILE_FALLBACK:
+        base_result["status"] = "disabled"
+        base_result["summary"] = "AI profile fallback is disabled by configuration."
+        report["ai_enrichment"] = base_result
+        return report
+
+    evidence = _ai_profile_evidence(company_name, domain, scraped, intel)
+    base_result["evidence_count"] = len(evidence)
+    existing = [
+        {"name": l.get("name"), "role": l.get("role"), "status": l.get("status")}
+        for l in (report.get("leadership_team") or [])[:8]
+        if isinstance(l, dict) and l.get("name")
+    ]
+    contact = report.get("contact_intelligence") if isinstance(report.get("contact_intelligence"), dict) else {}
+    company_profile = report.get("company_profile") if isinstance(report.get("company_profile"), dict) else {}
+    candidate_prompt = f"""Build a public leadership and contact candidate for this exact company.
+
+COMPANY: {company_name}
+WEBSITE: https://{domain}/
+EXISTING LEADERS: {json.dumps(existing, ensure_ascii=False)}
+EXISTING PUBLIC CONTACTS: {json.dumps({
+    'emails': (contact.get('emails') or [])[:10],
+    'phones': (contact.get('phones') or [])[:10],
+}, ensure_ascii=False)[:2500]}
+CURRENT PROFILE: {json.dumps({
+    'name': _field_text(company_profile.get('name')),
+    'headquarters': _field_text(company_profile.get('headquarters')),
+    'founded': _field_text(company_profile.get('founded')),
+}, ensure_ascii=False)}
+
+PUBLIC EVIDENCE (snippets and URLs):
+{json.dumps(evidence, ensure_ascii=False)[:14000] or '[]'}
+
+Return ONLY JSON:
+{{
+  "leadership": [{{"name":"Full Name","role":"CEO|CTO|CFO|COO|Founder|Co-founder|Chairperson|President|Managing Director|Director","status":"current|historical","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}}],
+  "point_of_contact": {{"name":"","title":"","email":"","phone":"","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}},
+  "headquarters": "city, country or empty",
+  "founded": "YYYY or empty"
+}}
+
+Rules:
+- Prefer current CEO, CTO, COO, CFO, President, Chair, Founder/Co-founder, or MD.
+- You may use well-known public knowledge for a current leader if crawling did not expose the name,
+  but set basis=model_knowledge. Never pretend that is a website citation.
+- Historical founders must be status=historical and must not be the POC unless still operating.
+- Never invent an email or phone. Only copy exact values visible in PUBLIC EVIDENCE.
+- Never use private data, guessed email patterns, or a similarly named company.
+- Empty is correct when the identity is not unambiguous.
+"""
+    try:
+        raw = llm_client.chat(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return valid JSON only. Research the exact public company. "
+                        "Separate evidence-backed facts from model knowledge and never invent contact details."
+                    ),
+                },
+                {"role": "user", "content": candidate_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=2200,
+            json_mode=True,
+            timeout=90.0,
+            reasoning_effort="low",
+        )
+        candidate = _parse_llm_json(raw)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Research] AI profile candidate failed: {exc}")
+        base_result["status"] = "candidate_unavailable"
+        base_result["summary"] = "AI profile candidate generation failed; public crawl data was kept."
+        report["ai_enrichment"] = base_result
+        return report
+
+    verdict = llm_judge.judge_ai_profile(
+        website_url=f"https://{domain}/",
+        domain=domain,
+        company_name=company_name,
+        candidate=candidate,
+        evidence=evidence,
+        existing_leaders=report.get("leadership_team") or [],
+    )
+    if verdict.get("_error"):
+        base_result["status"] = "judge_unavailable"
+        base_result["summary"] = "AI profile candidate was not promoted because the fact judge was unavailable."
+        report["ai_enrichment"] = base_result
+        return report
+
+    existing_rows = list(report.get("leadership_team") or [])
+    existing_keys = {(str(l.get("name") or "").strip().lower()) for l in existing_rows if isinstance(l, dict)}
+    added = 0
+    accepted_source_urls = []
+    for row in verdict.get("leadership") or []:
+        if not isinstance(row, dict) or not row.get("name"):
+            continue
+        name = row.get("name")
+        key = str(name).strip().lower()
+        urls = [u for u in (row.get("source_urls") or []) if isinstance(u, str) and u]
+        accepted_source_urls.extend(urls)
+        if key in existing_keys:
+            continue
+        status = row.get("verification_status") or "model-knowledge-reviewed"
+        source = "Public evidence + AI judge" if status == "evidence-verified" else "AI public knowledge + AI judge"
+        existing_rows.append({
+            "name": str(name).strip(),
+            "role": str(row.get("role") or "Leadership").strip(),
+            "source": source,
+            "confidence": row.get("confidence") or "Medium",
+            "verification_score": row.get("verification_score") or 0,
+            "verification_status": status,
+            "source_urls": urls,
+            "background": row.get("reason") or "Reviewed by the AI profile judge",
+            "status": row.get("status") or "current",
+            "is_current": (row.get("status") or "current") == "current",
+            "provenance": "public-evidence" if status == "evidence-verified" else "ai-knowledge",
+        })
+        existing_keys.add(key)
+        added += 1
+
+    report["leadership_team"] = auth.rank_leadership(
+        _normalize_leadership_list(existing_rows, company_name, scraped)
+    )
+
+    ai_poc = verdict.get("point_of_contact") if isinstance(verdict.get("point_of_contact"), dict) else {}
+    ai_poc = dict(ai_poc or {})
+    if not ai_poc and report.get("leadership_team"):
+        for leader in report.get("leadership_team") or []:
+            if leader.get("status") == "current" and re.search(
+                r"(?i)ceo|chief executive|managing director|president|chair|founder|owner", leader.get("role") or ""
+            ):
+                ai_poc = {
+                    "name": leader.get("name") or "",
+                    "title": leader.get("role") or "",
+                    "confidence": leader.get("confidence") or "Medium",
+                    "verification_status": leader.get("verification_status") or "model-knowledge-reviewed",
+                    "verification_score": leader.get("verification_score") or 0,
+                    "source_urls": leader.get("source_urls") or [],
+                    "reason": "Selected from the highest-ranked current leader after AI judging.",
+                }
+                break
+
+    if ai_poc.get("name") or ai_poc.get("email") or ai_poc.get("phone"):
+        ai_poc["source"] = (
+            "Public evidence + AI judge"
+            if ai_poc.get("verification_status") == "evidence-verified"
+            else "AI public knowledge + AI judge"
+        )
+        ai_poc["verified"] = ai_poc.get("verification_status") == "evidence-verified"
+        ai_poc["provenance"] = "public-evidence" if ai_poc["verified"] else "ai-knowledge"
+        ai_poc["source_urls"] = [u for u in (ai_poc.get("source_urls") or []) if isinstance(u, str) and u]
+        accepted_source_urls.extend(ai_poc.get("source_urls") or [])
+        ci = report.get("contact_intelligence") if isinstance(report.get("contact_intelligence"), dict) else {}
+        emails = list(ci.get("emails") or [])
+        email = str(ai_poc.get("email") or "").strip().lower()
+        if email and _email_domain_ok(email, domain) and not any(
+            isinstance(e, dict) and str(e.get("email") or "").lower() == email for e in emails
+        ):
+            emails.append({
+                "email": email,
+                "person": ai_poc.get("name") or "",
+                "person_name": ai_poc.get("name") or "",
+                "title": ai_poc.get("title") or "",
+                "label": ai_poc.get("title") or "AI-judged public contact",
+                "source": ai_poc.get("source") or "AI profile judge",
+                "source_urls": ai_poc.get("source_urls") or [],
+                "confidence": ai_poc.get("confidence") or "Medium",
+                "verified": bool(ai_poc.get("verified")),
+                "provenance": ai_poc.get("provenance") or "ai-knowledge",
+            })
+        ci["emails"] = emails[:20]
+        phones = list(ci.get("phones") or [])
+        phone = str(ai_poc.get("phone") or "").strip()
+        if phone and _is_valid_phone(phone) and not any(
+            isinstance(p, dict) and re.sub(r"\D", "", str(p.get("number") or "")) == re.sub(r"\D", "", phone)
+            for p in phones
+        ):
+            phones.append({
+                "number": phone,
+                "person": ai_poc.get("name") or "",
+                "person_name": ai_poc.get("name") or "",
+                "label": ai_poc.get("title") or "AI-judged public contact",
+                "source": ai_poc.get("source") or "AI profile judge",
+                "source_urls": ai_poc.get("source_urls") or [],
+                "confidence": ai_poc.get("confidence") or "Medium",
+                "verified": bool(ai_poc.get("verified")),
+                "provenance": ai_poc.get("provenance") or "ai-knowledge",
+            })
+        ci["phones"] = phones[:20]
+        report["contact_intelligence"] = ci
+
+    cp = report.get("company_profile") if isinstance(report.get("company_profile"), dict) else {}
+    for key, label in (("headquarters", "headquarters"), ("founded", "founded")):
+        fact = verdict.get(key) if isinstance(verdict.get(key), dict) else {}
+        if not fact.get("value"):
+            continue
+        current = _field_text(cp.get(key))
+        if current and "not publicly" not in current.lower() and "not available" not in current.lower():
+            continue
+        status = fact.get("verification_status") or "model-knowledge-reviewed"
+        cp[key] = _field(
+            fact["value"],
+            "Public evidence + AI judge" if status == "evidence-verified" else "AI public knowledge + AI judge",
+            fact.get("confidence") or "Medium",
+        )
+        accepted_source_urls.extend(fact.get("source_urls") or [])
+    report["company_profile"] = cp
+
+    unique_urls = list(dict.fromkeys(accepted_source_urls))[:20]
+    accepted_count = added + (1 if ai_poc else 0)
+    base_result.update({
+        "status": "complete" if accepted_count else "complete_no_new_facts",
+        "judge_score": int(verdict.get("overall_score") or 0),
+        "summary": verdict.get("summary") or "AI profile facts were reviewed for company identity and evidence.",
+        "source_urls": unique_urls,
+        "leaders_added": added,
+        "point_of_contact": ai_poc,
+        "evidence_count": len(evidence),
+    })
+    report["ai_enrichment"] = base_result
+    print(
+        f"[Research] AI profile judge: score={base_result['judge_score']} "
+        f"leaders_added={added} poc={bool(ai_poc)} evidence={len(evidence)}"
+    )
+    return report
+
+
 def _llm_public_profile_fill(company_name: str, domain: str, scraped: dict,
                              existing_leaders: list | None = None) -> dict:
     """
@@ -3890,16 +4292,26 @@ def _collect_leadership(company_name: str, domain: str, scraped: dict, intel: di
         ]
         if not RESEARCH_DEEP:
             queries = queries[:2]
-        for q in queries:
-            for r in _ddg_search(q, max_results=3):
-                href = (r.get("href") or "").lower()
-                if any(x in href for x in ("chatgpt.com", "chat.openai.com", "openai.com/chat")):
-                    continue
-                blob = f"{r.get('title','')} {r.get('body','')}"
-                if not _blob_matches_brand(blob, company_name, domain):
-                    continue
-                src = urlparse(r.get("href") or "").netloc.replace("www.", "") or "Web search"
-                leaders.extend(_parse_leadership_from_text(blob, src, company_name))
+        def _leadership_search(query: str) -> list:
+            try:
+                return _ddg_search(query, max_results=3)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Research] Leadership search failed for '{query}': {exc}")
+                return []
+
+        # These are independent public searches. Running them together reduces
+        # network wait without changing the source filters or accepted rows.
+        with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
+            for q, search_rows in zip(queries, pool.map(_leadership_search, queries)):
+                for r in search_rows or []:
+                    href = (r.get("href") or "").lower()
+                    if any(x in href for x in ("chatgpt.com", "chat.openai.com", "openai.com/chat")):
+                        continue
+                    blob = f"{r.get('title','')} {r.get('body','')}"
+                    if not _blob_matches_brand(blob, company_name, domain):
+                        continue
+                    src = urlparse(r.get("href") or "").netloc.replace("www.", "") or "Web search"
+                    leaders.extend(_parse_leadership_from_text(blob, src, company_name))
 
     out, seen = [], set()
     for l in leaders:
@@ -6072,7 +6484,13 @@ def run(url: str) -> dict:
     bg = ThreadPoolExecutor(max_workers=3, thread_name_prefix="prefetch")
     f_hiring = bg.submit(_fetch_hiring_signals, prefetch_name, domain, scraped.get("careers_text") or "", scraped)
     f_leaders = bg.submit(_collect_leadership, prefetch_name, domain, scraped, intel)
-    _EVIDENCE_PREFETCH[(prefetch_name, domain)] = bg.submit(_build_site_evidence_blob, prefetch_name, domain, scraped)
+    # The dedicated AI profile pass below owns the evidence prompt when it is
+    # enabled. Avoid starting the legacy four-query evidence sweep unless that
+    # fallback is actually needed.
+    if not RESEARCH_AI_PROFILE_FALLBACK:
+        _EVIDENCE_PREFETCH[(prefetch_name, domain)] = bg.submit(
+            _build_site_evidence_blob, prefetch_name, domain, scraped
+        )
 
     print(f"[Research] Phase 3: Azure/LLM ({MODEL}) analysis...")
     t0 = time.time()
@@ -6203,10 +6621,16 @@ def run(url: str) -> dict:
     needs_people = (not auth.has_operating_exec(merged_leaders)) or len(current_named) < 2
     needs_hq = (not hq_now) or "not publicly" in hq_now.lower()
     needs_founded = (not founded_now) or "not publicly" in founded_now.lower()
-    if RESEARCH_LLM_ENRICH and (needs_people or needs_hq or needs_founded):
+    if (
+        RESEARCH_LLM_ENRICH
+        and (needs_people or needs_hq or needs_founded)
+        and not RESEARCH_AI_PROFILE_FALLBACK
+    ):
         print("[Research] Public-profile fill (extract + LLM verify) for missing HQ/leadership/hiring")
         profile_fill = _llm_public_profile_fill(company_name, domain, scraped, merged_leaders)
         merged_leaders = profile_fill.get("leaders") or merged_leaders
+    elif RESEARCH_AI_PROFILE_FALLBACK and (needs_people or needs_hq or needs_founded):
+        print("[Research] Dedicated AI profile pass will handle missing HQ/leadership/contact")
     report["leadership_team"] = auth.rank_leadership(
         _normalize_leadership_list(merged_leaders, company_name, scraped)
     )
@@ -6291,14 +6715,36 @@ def run(url: str) -> dict:
         for k in ("cin", "mca_status", "authorized_capital", "paid_up_capital", "zaubacorp_url"):
             report["company_profile"].pop(k, None)
 
-    # If the public site, structured data and judged leadership still contain
-    # no usable contact, make one bounded public-knowledge attempt.  The
-    # candidate is never attached directly: _maybe_add_public_point_of_contact
-    # runs a separate evidence-backed judge and only attaches its sanitized
-    # decision.
-    report = _maybe_add_public_point_of_contact(
-        report, company_name, domain, scraped, intel
+    # Dedicated people/contact enrichment runs after the broad report judge so
+    # model-known executives are not silently removed by the generic report
+    # gate.  Its own fact-level judge supplies the visible provenance/score.
+    report = _run_ai_profile_fallback(report, company_name, domain, scraped, intel)
+
+    # The dedicated AI profile pass already searched and judged public contact
+    # evidence. Do not repeat the older candidate+judge pair on the normal
+    # path; retain it as a fail-soft fallback if the dedicated pass failed.
+    ai_profile_status = (report.get("ai_enrichment") or {}).get("status", "")
+    ai_profile_failed = ai_profile_status in {
+        "unavailable", "candidate_unavailable", "judge_unavailable",
+    }
+    existing_public_contact = (
+        any(
+            isinstance(e, dict)
+            and e.get("email")
+            and (e.get("person") or e.get("person_name") or e.get("name"))
+            for e in ((report.get("contact_intelligence") or {}).get("emails") or [])
+        )
+        or auth.has_operating_exec(report.get("leadership_team") or [])
     )
+    if RESEARCH_AI_PROFILE_FALLBACK and not ai_profile_failed and not existing_public_contact:
+        report["_contact_verification"] = {
+            "status": "ai_profile_used",
+            "source_urls": (report.get("ai_enrichment") or {}).get("source_urls", []),
+        }
+    else:
+        report = _maybe_add_public_point_of_contact(
+            report, company_name, domain, scraped, intel
+        )
 
     # Final identity hard-lock (blocked scrapes / judge drift)
     company_name = _anchor_company_name(company_name, domain, scraped)
@@ -6328,7 +6774,14 @@ def run(url: str) -> dict:
             print(f"[Research] Background hiring lookup failed ({e}) - retrying inline")
     if hiring is None:
         hiring = _fetch_hiring_signals(company_name, domain, careers_text, scraped)
-    if RESEARCH_LLM_ENRICH and not hiring:
+    if (
+        RESEARCH_LLM_ENRICH
+        and not hiring
+        and (
+            not RESEARCH_AI_PROFILE_FALLBACK
+            or ai_profile_failed
+        )
+    ):
         if not profile_fill:
             print("[Research] Public-profile fill for missing hiring status")
             profile_fill = _llm_public_profile_fill(company_name, domain, scraped, merged_leaders)
@@ -6403,6 +6856,8 @@ def run(url: str) -> dict:
         _add_cite("Contact / Footer", cp, "Contact")
     for contact_url in ((report.get("contact_intelligence") or {}).get("public_point_of_contact") or {}).get("source_urls", []):
         _add_cite("Public contact evidence", contact_url, "Public Web")
+    for profile_url in (report.get("ai_enrichment") or {}).get("source_urls", []):
+        _add_cite("AI profile evidence", profile_url, "Public Web")
     for sl in scraped.get("social_links", [])[:8]:
         if auth.host_is_social(sl):
             _add_cite(urlparse(sl).netloc.replace("www.", ""), sl, "Social Media")
@@ -6454,7 +6909,12 @@ def run(url: str) -> dict:
     if _founded_missing() and (profile_fill or {}).get("founded"):
         cp["founded"] = _field(profile_fill["founded"], "Public company profiles", "Medium")
     # Last resort HQ search if the combined fill still left it empty
-    if _hq_missing() and RESEARCH_LLM_ENRICH and not (profile_fill or {}).get("headquarters"):
+    if (
+        _hq_missing()
+        and RESEARCH_LLM_ENRICH
+        and not (profile_fill or {}).get("headquarters")
+        and (not RESEARCH_AI_PROFILE_FALLBACK or ai_profile_failed)
+    ):
         hq_fill = _enrich_headquarters_via_llm(company_name, domain)
         if hq_fill.get("headquarters"):
             cp["headquarters"] = _field(
@@ -6534,6 +6994,9 @@ def run(url: str) -> dict:
         ),
         "public_contact_status": (report.get("_contact_verification") or {}).get("status", "unavailable"),
         "public_contact_sources": (report.get("_contact_verification") or {}).get("source_urls", []),
+        "ai_profile_status": (report.get("ai_enrichment") or {}).get("status", "unavailable"),
+        "ai_profile_judge_score": (report.get("ai_enrichment") or {}).get("judge_score", 0),
+        "ai_profile_evidence_count": (report.get("ai_enrichment") or {}).get("evidence_count", 0),
     }
     report["intelligence_score"] = auth.compute_honest_scores(
         report, citations=citations, judge_quality=judge_q

@@ -204,3 +204,130 @@ def test_parked_domain_is_not_company_evidence():
     assert not company_research._is_parked_page_text(
         "Acme leadership", "Acme is a software company"
     )
+
+
+def test_ai_profile_judge_labels_model_knowledge_and_strips_ungrounded_contact(monkeypatch):
+    monkeypatch.setattr(
+        llm_judge.llm_client,
+        "chat",
+        lambda *_args, **_kwargs: json.dumps({
+            "overall_score": 82,
+            "summary": "The leader is supported; the email was not supported.",
+            "leadership": [{
+                "name": "Alice Example",
+                "role": "CEO",
+                "status": "current",
+                "keep": True,
+                "confidence": "High",
+                "verification_status": "evidence-verified",
+                "source_urls": ["https://acme.example/team"],
+            }],
+            "point_of_contact": {
+                "keep": True,
+                "name": "Alice Example",
+                "title": "CEO",
+                "email": "alice@example.com",
+                "confidence": "High",
+                "verification_status": "evidence-verified",
+                "source_urls": ["https://acme.example/team"],
+            },
+        }),
+    )
+
+    result = llm_judge.judge_ai_profile(
+        website_url="https://acme.example/",
+        domain="acme.example",
+        company_name="Acme",
+        candidate={"leadership": [{"name": "Alice Example"}]},
+        evidence=[{
+            "url": "https://acme.example/team",
+            "title": "Acme leadership",
+            "snippet": "Alice Example is the current CEO of Acme.",
+        }],
+    )
+
+    assert result["leadership"][0]["verification_status"] == "evidence-verified"
+    assert result["point_of_contact"]["name"] == "Alice Example"
+    assert result["point_of_contact"]["email"] == ""
+
+
+def test_ai_profile_fallback_adds_judged_leader_and_point_of_contact(monkeypatch):
+    monkeypatch.setattr(company_research, "RESEARCH_AI_PROFILE_FALLBACK", True)
+    monkeypatch.setattr(
+        company_research,
+        "_ai_profile_evidence",
+        lambda *_args, **_kwargs: [{
+            "url": "https://acme.example/team",
+            "title": "Acme leadership",
+            "snippet": "Bob Example is the current CEO of Acme.",
+            "source": "Company Website",
+        }],
+    )
+    responses = iter([
+        json.dumps({
+            "leadership": [{
+                "name": "Bob Example",
+                "role": "CEO",
+                "status": "current",
+                "basis": "evidence",
+                "confidence": "High",
+            }],
+            "point_of_contact": {"name": "Bob Example", "title": "CEO", "confidence": "High"},
+        }),
+        json.dumps({
+            "overall_score": 88,
+            "summary": "Bob Example is supported by the company team page.",
+            "leadership": [{
+                "name": "Bob Example",
+                "role": "CEO",
+                "status": "current",
+                "keep": True,
+                "confidence": "High",
+                "verification_status": "evidence-verified",
+                "source_urls": ["https://acme.example/team"],
+            }],
+            "point_of_contact": {
+                "keep": True,
+                "name": "Bob Example",
+                "title": "CEO",
+                "confidence": "High",
+                "verification_status": "evidence-verified",
+                "source_urls": ["https://acme.example/team"],
+            },
+        }),
+    ])
+    monkeypatch.setattr(company_research.llm_client, "chat", lambda *_args, **_kwargs: next(responses))
+
+    report = {
+        "company_profile": {"name": "Acme", "headquarters": {"value": "Not publicly available"}},
+        "contact_intelligence": {"emails": [], "phones": []},
+        "leadership_team": [],
+    }
+    result = company_research._run_ai_profile_fallback(
+        report, "Acme", "acme.example", _site(), {}
+    )
+
+    assert result["ai_enrichment"]["status"] == "complete"
+    assert result["ai_enrichment"]["judge_score"] == 88
+    assert result["leadership_team"][0]["name"] == "Bob Example"
+    assert result["leadership_team"][0]["verification_status"] == "evidence-verified"
+    contact = research_authenticity.select_point_of_contact(result)
+    assert contact["name"] == "Bob Example"
+    assert contact["verification_status"] == "evidence-verified"
+
+
+def test_ai_profile_evidence_preserves_search_query_context(monkeypatch):
+    monkeypatch.setattr(
+        company_research,
+        "_ddg_search",
+        lambda query, **_kwargs: [{
+            "href": "https://acme.example/public-leadership",
+            "title": "Acme leadership",
+            "body": f"Public result for {query}",
+        }],
+    )
+
+    records = company_research._ai_profile_evidence("Acme", "acme.example", _site(), {})
+
+    assert records
+    assert any("Search query:" in record["snippet"] for record in records)

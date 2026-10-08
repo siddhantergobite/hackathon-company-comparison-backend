@@ -14,8 +14,9 @@ import SourcesCard from '../components/target/SourcesCard';
 const RESEARCH_STEPS = [
   'Reading the company website',
   'Checking Wikipedia and Wikidata',
+  'Filling missing public leaders and contacts with AI knowledge',
   'Structuring the report with AI',
-  'Verifying leadership, hiring and financials',
+  'Judging each leadership and contact fact',
 ];
 
 export default function TargetPage() {

@@ -33,6 +33,12 @@ export default function ContactsPanel({ report }) {
             {hasData(poc.phone) && <div>{poc.phone}</div>}
             {poc.reason && <div className="mini-card__meta">{poc.reason}</div>}
             <CiteBadge field={poc} />
+            {poc.verification_status === 'model-knowledge-reviewed' && (
+              <span className="cite-badge cite-badge--medium">AI knowledge reviewed</span>
+            )}
+            {poc.verification_status === 'evidence-verified' && (
+              <span className="cite-badge cite-badge--high">Evidence verified</span>
+            )}
           </div>
         </div>
       )}

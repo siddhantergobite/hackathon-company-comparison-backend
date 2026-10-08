@@ -18,6 +18,9 @@ export function bestPoc(report) {
       confidence: supplied.confidence || '',
       source: supplied.source || '',
       source_urls: supplied.source_urls || [],
+      verification_status: supplied.verification_status || '',
+      verification_score: supplied.verification_score || 0,
+      provenance: supplied.provenance || '',
     };
   }
   const co = report.company_profile || {};
@@ -92,6 +95,7 @@ export function buildTargetView(report) {
   const completeness = scoreNum(sc.data_completeness);
   const reliability = scoreNum(sc.source_reliability);
   const authenticity = scoreNum(sc.authenticity);
+  const aiProfileScore = scoreNum(sc.ai_profile_score ?? report.ai_enrichment?.judge_score);
 
   const summaryText = flattenVal(sc.summary);
   const heroSummary =
@@ -120,6 +124,7 @@ export function buildTargetView(report) {
     completeness,
     reliability,
     authenticity,
+    aiProfileScore,
     kpis,
     citations,
     citationCount: meta.citation_count || citations.length,

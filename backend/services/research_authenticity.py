@@ -357,6 +357,29 @@ def select_point_of_contact(report: dict) -> dict:
                 "source_urls": judged_contact.get("source_urls") or [],
             }
 
+    # The dedicated AI profile pass may know a public executive even when the
+    # crawler did not expose the name.  Keep that contact visible, but preserve
+    # its explicit model-knowledge/evidence status so it is never mistaken for
+    # a website-verified contact.
+    ai_contact = (report.get("ai_enrichment") or {}).get("point_of_contact")
+    if isinstance(ai_contact, dict) and any(ai_contact.get(k) for k in ("name", "email", "phone")):
+        status = ai_contact.get("verification_status") or "model-knowledge-reviewed"
+        if status in ("evidence-verified", "model-knowledge-reviewed"):
+            return {
+                "name": (ai_contact.get("name") or "").strip(),
+                "title": ai_contact.get("title") or "",
+                "email": ai_contact.get("email") or "",
+                "phone": ai_contact.get("phone") or "",
+                "company": company,
+                "reason": ai_contact.get("reason") or "Selected by the AI profile judge",
+                "confidence": ai_contact.get("confidence") or "Medium",
+                "source": ai_contact.get("source") or "AI public knowledge + AI judge",
+                "source_urls": ai_contact.get("source_urls") or [],
+                "verification_status": status,
+                "verification_score": ai_contact.get("verification_score") or 0,
+                "provenance": ai_contact.get("provenance") or "ai-knowledge",
+            }
+
     named_email = None
     for e in emails:
         if not isinstance(e, dict):
@@ -790,6 +813,15 @@ def compute_honest_scores(report: dict, citations: list | None = None, judge_qua
             authenticity = 55
     authenticity = max(10, min(92, int(authenticity)))
 
+    ai_profile_score = None
+    ai_enrichment = report.get("ai_enrichment") if isinstance(report.get("ai_enrichment"), dict) else {}
+    try:
+        parsed_ai_score = int(ai_enrichment.get("judge_score"))
+        if parsed_ai_score > 0:
+            ai_profile_score = max(0, min(100, parsed_ai_score))
+    except (TypeError, ValueError):
+        ai_profile_score = None
+
     # Penalties
     if not has_named_current_leadership(leaders):
         authenticity = min(authenticity, 70)
@@ -829,6 +861,8 @@ def compute_honest_scores(report: dict, citations: list | None = None, judge_qua
     ]
     if not has_named_current_leadership(leaders):
         summary_bits.append("current leadership not independently verified — omitted rather than guessed")
+    if ai_profile_score is not None:
+        summary_bits.append(f"AI profile judge {ai_profile_score}/100")
     summary = "; ".join(summary_bits) + "."
 
     return {
@@ -839,5 +873,6 @@ def compute_honest_scores(report: dict, citations: list | None = None, judge_qua
         "verified_fields_count": verified,
         "estimated_fields_count": estimated,
         "unverified_fields_count": unverified,
+        "ai_profile_score": ai_profile_score,
         "summary": summary,
     }

@@ -43,7 +43,7 @@ export default function EmailDraft({ email = {}, actions }) {
         </div>
         <div className="email__row">
           <dt>Subject</dt>
-          <dd style={{ fontWeight: 600 }}>{flattenVal(email.subject) || '—'}</dd>
+          <dd className="email__subject">{flattenVal(email.subject) || '—'}</dd>
         </div>
       </dl>
 

@@ -17,6 +17,7 @@ export default function ConfidenceCard({ view }) {
           </a>
         )}
         {view.generatedAt && <span>Generated: {view.generatedAt}</span>}
+        {view.aiProfileScore != null && <span>AI profile judge: {view.aiProfileScore}/100</span>}
         <span>Completeness is not accuracy — overall is capped by authenticity and source reliability.</span>
       </div>
     </Card>

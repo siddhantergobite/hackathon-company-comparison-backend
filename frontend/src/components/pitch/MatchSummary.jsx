@@ -17,7 +17,7 @@ export default function MatchSummary({ pitch, pitcherName, targetName }) {
         </div>
       </div>
       <div className="table-wrap">
-        <table className="table">
+        <table className="table match-table">
           <thead>
             <tr>
               <th>{pitcherName} offer</th>

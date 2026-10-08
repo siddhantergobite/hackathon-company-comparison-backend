@@ -61,6 +61,12 @@ export default function SummaryCards({ view }) {
             {hasData(poc.email) && <div className="mini-card__meta">{poc.email}</div>}
             {hasData(poc.phone) && <div className="mini-card__meta">{poc.phone}</div>}
             {poc.reason && <div className="mini-card__meta">{poc.reason}</div>}
+            {poc.verification_status === 'model-knowledge-reviewed' && (
+              <div className="mini-card__meta">AI knowledge reviewed</div>
+            )}
+            {poc.verification_status === 'evidence-verified' && (
+              <div className="mini-card__meta">Evidence verified</div>
+            )}
             {(poc.source || poc.confidence) && (
               <div className="mini-card__meta">{[poc.source, poc.confidence].filter(Boolean).join(' · ')}</div>
             )}
