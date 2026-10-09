@@ -178,12 +178,30 @@ def probe_groq() -> dict[str, Any]:
 
 def _azure_client():
     from openai import OpenAI
-    return OpenAI(api_key=AZURE_KEY, base_url=AZURE_ENDPOINT)
+    # Research stages already have bounded timeouts and fail-soft fallbacks.
+    # SDK retries otherwise multiply those timeouts into several minutes.
+    return OpenAI(api_key=AZURE_KEY, base_url=AZURE_ENDPOINT, max_retries=0)
 
 
 def _is_reasoning_model(model: str) -> bool:
     m = (model or "").lower()
     return any(x in m for x in ("gpt-5", "o1", "o3", "o4"))
+
+
+def _is_json_mode_compat_error(exc: Exception) -> bool:
+    """Only retry without JSON mode when the provider rejects that parameter.
+
+    Network timeouts, rate limits, and service errors used to trigger a second
+    full-duration model request with the same prompt. That retry did not make
+    those failures more likely to succeed and could nearly double research time.
+    """
+    message = str(exc).lower()
+    parameter_mentioned = any(term in message for term in ("response_format", "json_object"))
+    incompatibility = any(
+        term in message
+        for term in ("unsupported", "not supported", "unknown parameter", "unexpected keyword", "invalid")
+    )
+    return parameter_mentioned and incompatibility
 
 
 def chat_groq(
@@ -205,7 +223,7 @@ def chat_groq(
             "Save the key in that file (Ctrl+S), then retry."
         )
     from groq import Groq
-    client = Groq(api_key=GROQ_KEY)
+    client = Groq(api_key=GROQ_KEY, max_retries=0)
     use_model = model or GROQ_MODEL
     # gpt-oss models on Groq often break with response_format=json_object — prefer plain JSON text
     force_plain = json_mode and ("gpt-oss" in use_model or "qwen" in use_model)
@@ -228,7 +246,7 @@ def chat_groq(
                 "Create a new key at https://console.groq.com/keys , paste it into that .env, "
                 "SAVE the file, then open /api/llm-status?probe=1 to verify."
             ) from e1
-        if json_mode:
+        if json_mode and _is_json_mode_compat_error(e1):
             print(f"[Groq] json_mode failed ({e1}); retrying plain")
             kwargs.pop("response_format", None)
             kwargs["max_tokens"] = max(max_tokens, 1200)
@@ -358,7 +376,7 @@ def chat(
             try:
                 text = _azure_call(json_mode, first_budget)
             except Exception as e1:
-                if json_mode:
+                if json_mode and _is_json_mode_compat_error(e1):
                     print(f"[Azure OpenAI] json_mode failed ({e1}); retrying plain")
                     text = _azure_call(False, first_budget)
                 else:

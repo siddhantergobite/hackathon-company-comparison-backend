@@ -137,6 +137,7 @@ def judge_research_report(
     report: dict,
     wikidata_hint: Optional[dict] = None,
     public_evidence: Optional[list[dict]] = None,
+    timeout: float = 70.0,
 ) -> dict:
     """
     Validate / sanitize the research JSON. Drop wrong competitors, wrong people,
@@ -266,7 +267,7 @@ RULES:
 4. Revenue and funding: keep a value only when the exact company and value are supported by a supplied evidence excerpt/source URL. Revenue and funding totals also need a currency and scale (million/billion/crore) or a 9+ digit amount. Reject stock prices like "$507.29". Prefer domain-matched Wikidata revenue. Never infer funding stage or profitability. Otherwise use "Not publicly available".
 5. market_position must be a real business summary — never login pages, cookie banners, or unrelated SaaS.
 6. Review every supplied report section, including SWOT, risks, news, hiring, contacts, products, leadership, competitors, and finance. For SWOT and risk entries, retain only claims that point to a supplied source URL. Label strategic implications as analysis/inference, not fact. Do not create opportunities, threats, or a numeric overall risk level from generic industry assumptions.
-7. Keep a news item only when a supplied public source clearly concerns this exact company. Do not call an undated item “latest”; reject unrelated publication names and search-result noise.
+7. Keep a news or event item only when a supplied public source clearly concerns this exact company and supports its date. A future date is valid only for a clearly identified event. Do not call an undated item “latest”; reject unrelated publication names and search-result noise.
 8. quality_score is AUTHENTICITY 0-100, NOT completeness. Penalize missing current CEO, unit-less revenue, weak sources, and cross-domain people/competitors. Typical honest range is 45-85. Never 100 unless Wikidata+official site agree on identity, CEO, and HQ.
 9. Indian MCA / ZaubaCorp is disabled. Always drop_registry=true.
 10. Return JSON ONLY:
@@ -323,7 +324,7 @@ RULES:
             temperature=0.0,
             max_tokens=3400,
             json_mode=True,
-            timeout=70.0,
+            timeout=timeout,
         )
         data = _parse_json(raw)
         data["drop_registry"] = True
@@ -364,6 +365,7 @@ def judge_ai_profile(
     candidate: dict,
     evidence: list[dict],
     existing_leaders: Optional[list] = None,
+    timeout: float = 90.0,
 ) -> dict:
     """Judge the dedicated AI knowledge fallback at fact level.
 
@@ -506,7 +508,7 @@ Return ONLY JSON:
             temperature=0.0,
             max_tokens=2600,
             json_mode=True,
-            timeout=90.0,
+            timeout=timeout,
             reasoning_effort="low",
         )
         data = _parse_json(raw)
@@ -772,6 +774,7 @@ def judge_hiring_signals(
     company_name: str,
     domain: str,
     signals: list,
+    timeout: float = 45.0,
 ) -> dict:
     """Keep only openings where THIS company is the employer."""
     compact = []
@@ -816,7 +819,7 @@ Return JSON ONLY:
             temperature=0.0,
             max_tokens=700,
             json_mode=True,
-            timeout=45.0,
+            timeout=timeout,
         )
         data = _parse_json(raw)
         urls = data.get("keep_urls") or []
@@ -835,6 +838,7 @@ def judge_public_point_of_contact(
     candidate: dict,
     evidence: list[dict],
     existing_leaders: Optional[list] = None,
+    timeout: float = 50.0,
 ) -> dict:
     """Verify a public business contact before it is added to a report.
 
@@ -931,7 +935,7 @@ Return JSON only:
             temperature=0.0,
             max_tokens=700,
             json_mode=True,
-            timeout=50.0,
+            timeout=timeout,
             reasoning_effort="low",
         )
         data = _parse_json(raw)

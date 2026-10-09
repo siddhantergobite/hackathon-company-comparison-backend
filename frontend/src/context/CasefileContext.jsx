@@ -6,7 +6,7 @@ import { getTargetName } from '../utils/target';
 const CasefileContext = createContext(null);
 
 const STORAGE_KEY = 'casefile:session:v1';
-const EMPTY = { brochure: null, target: null, pitch: null, aeo: null, outreachLog: [] };
+const EMPTY = { brochure: null, target: null, targetUrl: '', pitch: null, aeo: null, outreachLog: [] };
 
 function loadSession() {
   try {
@@ -75,29 +75,32 @@ export function CasefileProvider({ children }) {
       uploadBrochure: (file) =>
         track('brochure', async () => setSlice('brochure', await api.brochureUpload(file))),
 
+      setTargetUrl: (url) => setData((d) => ({ ...d, targetUrl: url })),
+
       researchTarget: async (url) => {
         const requestId = ++targetRequestId.current;
+        const startedAt = Date.now();
 
         // A new target invalidates every target-dependent result immediately.
         // This prevents an old report/draft from being shown while the new
         // research is running or after the new request fails.
-        setData((d) => ({ ...d, target: null, pitch: null, aeo: null, outreachLog: [] }));
-        setRequests((r) => ({ ...r, target: { loading: true, error: null } }));
+        setData((d) => ({ ...d, target: null, targetUrl: url, pitch: null, aeo: null, outreachLog: [] }));
+        setRequests((r) => ({ ...r, target: { loading: true, error: null, startedAt, requestedUrl: url } }));
         try {
           const report = await api.companyResearch(url);
           if (requestId !== targetRequestId.current) return false;
           setSlice('target', report);
-          setRequests((r) => ({ ...r, target: { loading: false, error: null } }));
+          setRequests((r) => ({ ...r, target: { loading: false, error: null, startedAt: null, requestedUrl: null } }));
           return true;
         } catch (e) {
           if (requestId !== targetRequestId.current) return false;
           const message = e?.message || 'Something went wrong';
-          setRequests((r) => ({ ...r, target: { loading: false, error: message } }));
+          setRequests((r) => ({ ...r, target: { loading: false, error: message, startedAt: null, requestedUrl: null } }));
           toast.error(message);
           return false;
         } finally {
           if (requestId === targetRequestId.current) {
-            setRequests((r) => ({ ...r, target: { ...r.target, loading: false } }));
+            setRequests((r) => ({ ...r, target: { ...r.target, loading: false, startedAt: null, requestedUrl: null } }));
           }
         }
       },
@@ -107,7 +110,7 @@ export function CasefileProvider({ children }) {
         // so it cannot be mistaken for results for the newly entered URL.
         targetRequestId.current += 1;
         setData((d) => ({ ...d, target: null, pitch: null, aeo: null, outreachLog: [] }));
-        setRequests((r) => ({ ...r, target: { loading: false, error: null } }));
+        setRequests((r) => ({ ...r, target: { loading: false, error: null, startedAt: null, requestedUrl: null } }));
       },
 
       generatePitch: () =>

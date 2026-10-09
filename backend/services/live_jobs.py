@@ -1298,10 +1298,50 @@ def _scan_search_terms(
     skills: list[str],
     locations: list[str],
 ) -> tuple[list[str], bool]:
-    """Choose the discovery terms for a live scan and add location context."""
+    """Choose bounded discovery queries for a live scan.
+
+    A selected skill is a filter, but it also needs to seed discovery. Searching
+    only for the bare word (for example, ``Python``) can miss listings indexed
+    under role titles such as ``Python Backend Engineer``. Use a small set of
+    title variants, interleaved across selected skills so one skill cannot
+    crowd the others out of the query budget.
+    """
     resume_terms = search_queries_for_scan(bench)
     from_resumes = bool(resume_terms) and not skills
-    base_terms = skills or resume_terms or list(DEFAULT_SEARCH_QUERIES)
+    if skills:
+        variants_by_skill = []
+        for skill in skills:
+            clean_skill = re.sub(r"\s+", " ", str(skill or "")).strip()[:60]
+            if not clean_skill:
+                continue
+            variants_by_skill.append([
+                clean_skill,
+                f"{clean_skill} jobs",
+                f"{clean_skill} developer",
+                f"{clean_skill} engineer",
+                f"{clean_skill} software engineer",
+                f"{clean_skill} backend engineer",
+                f"{clean_skill} data engineer",
+                f"{clean_skill} machine learning engineer",
+            ])
+
+        base_terms = []
+        seen_terms: set[str] = set()
+        for depth in range(max((len(items) for items in variants_by_skill), default=0)):
+            for variants in variants_by_skill:
+                if depth >= len(variants):
+                    continue
+                term = variants[depth]
+                key = term.casefold()
+                if key not in seen_terms:
+                    seen_terms.add(key)
+                    base_terms.append(term)
+                    if len(base_terms) >= 8:
+                        break
+            if len(base_terms) >= 8:
+                break
+    else:
+        base_terms = resume_terms or list(DEFAULT_SEARCH_QUERIES)
     # Location is passed to LinkedIn as its structured `location` parameter
     # and added to Naukri's public-search query separately. Keeping it out of
     # the keyword text prevents LinkedIn from returning a different country.

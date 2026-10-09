@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { ArrowRight, Building2, Globe } from 'lucide-react';
 import { useCasefile } from '../context/CasefileContext';
 import { useToast } from '../context/ToastContext';
@@ -31,17 +31,19 @@ function normalizedHost(value) {
 }
 
 export default function TargetPage() {
-  const { target, requests, researchTarget, clearTargetResearch } = useCasefile();
+  const { target, targetUrl: url, setTargetUrl, requests, researchTarget, clearTargetResearch } = useCasefile();
   const toast = useToast();
-  const [url, setUrl] = useState('');
-  const { loading, error } = requests.target || {};
+  const { loading, error, startedAt, requestedUrl } = requests.target || {};
   const view = useMemo(() => (target ? buildTargetView(target) : null), [target]);
   const targetHost = normalizedHost(target?._meta?.queried_url || target?._meta?.domain);
 
   const onUrlChange = (nextValue) => {
-    setUrl(nextValue);
+    setTargetUrl(nextValue);
     const nextHost = normalizedHost(nextValue);
-    if (target && nextHost && targetHost && nextHost !== targetHost) clearTargetResearch();
+    const requestHost = normalizedHost(requestedUrl);
+    if ((target && nextHost !== targetHost) || (loading && requestHost && nextHost !== requestHost)) {
+      clearTargetResearch();
+    }
   };
 
   const onSearch = () => {
@@ -82,7 +84,7 @@ export default function TargetPage() {
             loading={loading}
             label="Target company website"
           />
-          <p className="form-hint">Public sources only. Research usually takes 30–90 seconds and can run up to 3 minutes.</p>
+          <p className="form-hint">Public-source research runs in the background. You can open Live Jobs and return; this search continues.</p>
         </div>
 
         {error && !loading && (
@@ -91,7 +93,7 @@ export default function TargetPage() {
           </Banner>
         )}
 
-        {loading && <LoadingPanel title="Researching target company…" steps={RESEARCH_STEPS} />}
+        {loading && <LoadingPanel title="Researching target company…" steps={RESEARCH_STEPS} startedAt={startedAt} />}
 
         {!loading && !view && (
           <EmptyState icon={Building2} title="No target researched yet">

@@ -5,19 +5,21 @@ const safeHttpUrl = (value) => /^https?:\/\//i.test(String(value || '').trim()) 
 
 export default function NewsPanel({ report }) {
   const news = asArray(report.recent_news).slice(0, 4);
-  if (!news.length) return <p className="field-value muted">No recent, dated company news was verified in the sources checked.</p>;
+  if (!news.length) return <p className="field-value muted">No company news or events with a verifiable date were found in the accessible public sources checked.</p>;
 
   return (
     <div>
       {news.map((n, i) => {
         const sourceUrl = safeHttpUrl(n.source_url || n.url);
-        const dateVerified = n.date_status === 'date-verified';
+        const dateVerified = String(n.date_status || '').startsWith('date-verified');
+        const upcoming = n.date_status === 'date-verified-upcoming';
+        const kind = String(n.kind || '').toLowerCase() === 'event' ? 'Event' : 'News';
         return (
           <div className="data-row" key={`${n.title}-${i}`}>
             <strong>{n.title || 'Company update'}</strong>
-            {n.sentiment && <Tag>{flattenVal(n.sentiment)}</Tag>}
+            <Tag>{kind}</Tag>
             <span className={`cite-badge ${dateVerified ? 'cite-badge--high' : 'cite-badge--medium'}`}>
-              {dateVerified && n.date ? flattenVal(n.date) : 'Date not verified'}
+              {dateVerified && n.date ? `${upcoming ? 'Upcoming · ' : ''}${flattenVal(n.date)}` : 'Date not verified'}
             </span>
             <p className="text-sm muted" style={{ marginTop: 4 }}>
               {flattenVal(n.summary) || 'No summary available.'}

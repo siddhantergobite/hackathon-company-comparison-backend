@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, Loader2 } from 'lucide-react';
 import { Card } from './Card';
 import { LinkButton } from './Button';
@@ -21,14 +21,17 @@ export function Banner({ tone = 'info', title, children, action }) {
 
 // Progress is indicative only (the API gives no progress events): it eases toward
 // ~94% and never reaches 100% until the request actually finishes.
-export function LoadingPanel({ title, steps = [] }) {
-  const [elapsed, setElapsed] = useState(0);
+export function LoadingPanel({ title, steps = [], startedAt }) {
+  const localStartedAt = useRef(Date.now());
+  const startTime = Number.isFinite(startedAt) ? startedAt : localStartedAt.current;
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    const id = window.setInterval(() => setElapsed((s) => s + 1), 1000);
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
 
+  const elapsed = Math.max(0, Math.floor((now - startTime) / 1000));
   const stepIndex = steps.length ? Math.min(steps.length - 1, Math.floor(elapsed / 7)) : 0;
   const pct = Math.min(94, Math.round(100 * (1 - Math.exp(-elapsed / 45))));
 

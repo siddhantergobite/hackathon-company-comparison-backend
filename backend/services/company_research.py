@@ -8,7 +8,7 @@ Phase 4 — ANALYZE   : Azure OpenAI (primary) via shared LLM client
 Phase 5 — REPORT    : Structured deep intelligence JSON
 """
 
-import os, re, json, time
+import os, re, json, time, ipaddress, socket
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -32,8 +32,8 @@ MODEL = (
     )
 )
 
-# Deep mode is the production default so the report searches broadly enough to
-# find leadership, points of contact, and public evidence beyond the homepage.
+# The bounded research path is the default for interactive use. Deep mode can
+# still be enabled explicitly for a broader public-web sweep.
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -41,7 +41,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() not in ("0", "false", "no", "off", "")
 
 
-RESEARCH_DEEP = _env_flag("RESEARCH_DEEP", True)
+RESEARCH_DEEP = _env_flag("RESEARCH_DEEP", False)
 RESEARCH_FAST = not RESEARCH_DEEP
 # The report judge remains enabled by default. Set the skip flag only when a
 # deliberately faster, less-validated response is needed.
@@ -51,6 +51,17 @@ RESEARCH_SKIP_HIRING_SEARCH = _env_flag("RESEARCH_SKIP_HIRING_SEARCH", False)
 # the site scrape finds nothing. Every retained fact gets a visible status.
 RESEARCH_LLM_ENRICH = _env_flag("RESEARCH_LLM_ENRICH", True)
 RESEARCH_AI_PROFILE_FALLBACK = _env_flag("RESEARCH_AI_PROFILE_FALLBACK", True)
+
+# Bound the sequential model stages in the interactive path. The independent
+# report and fact judges remain enabled; timeouts only return the sourced
+# fallback fields when a provider is slow or unavailable.
+REPORT_LLM_TIMEOUT = 30.0 if RESEARCH_FAST else 50.0
+REPORT_JUDGE_TIMEOUT = 30.0 if RESEARCH_FAST else 70.0
+PROFILE_LLM_TIMEOUT = 30.0 if RESEARCH_FAST else 90.0
+PROFILE_JUDGE_TIMEOUT = 30.0 if RESEARCH_FAST else 90.0
+HIRING_LLM_TIMEOUT = 20.0 if RESEARCH_FAST else 50.0
+HIRING_JUDGE_TIMEOUT = 20.0 if RESEARCH_FAST else 45.0
+CONCLUSION_LLM_TIMEOUT = 10.0 if RESEARCH_FAST else 35.0
 
 # ZaubaCorp / Indian MCA / CIN — fully OFF (user requested remove CIN completely).
 # Research uses website + global public web only (pre-CIN behavior).
@@ -2338,6 +2349,31 @@ def _ddg_search(query: str, max_results: int = 8) -> list:
         return []
 
 
+def _ddg_news_search(query: str, max_results: int = 4) -> list:
+    """Use DDGS news results when available, with public web search as fallback."""
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+        try:
+            client = DDGS(timeout=5)
+        except TypeError:  # older duckduckgo_search versions
+            client = DDGS()
+        with client as ddgs:
+            search = getattr(ddgs, "news", None)
+            if callable(search):
+                rows = list(search(query, max_results=max_results) or [])
+                if rows:
+                    return rows
+    except Exception as e:
+        print(f"[Research] DDG News failed for '{query}': {e}")
+    # Some installed DDGS backends do not expose news(), or may temporarily
+    # fail. Search snippets remain candidates only; the article page is fetched
+    # and checked before anything is shown as company news.
+    return _ddg_search(query, max_results=max_results)
+
+
 def _is_valid_phone(num: str) -> bool:
     """Reject stock ticks / decimals / too-short fragments mistaken as phones."""
     raw = (num or "").strip()
@@ -3318,7 +3354,7 @@ Return JSON only:
             temperature=0.0,
             max_tokens=650,
             json_mode=True,
-            timeout=50.0,
+            timeout=PROFILE_LLM_TIMEOUT,
             reasoning_effort="low",
         )
         candidate = _parse_llm_json(raw)
@@ -3345,6 +3381,7 @@ Return JSON only:
         candidate=candidate,
         evidence=evidence,
         existing_leaders=existing_leaders,
+        timeout=PROFILE_JUDGE_TIMEOUT,
     )
     if verdict.get("_error") or not verdict.get("accept"):
         result["status"] = "rejected"
@@ -3527,11 +3564,11 @@ def _ai_profile_evidence(
     scraped: dict | None = None,
     intel: dict | None = None,
 ) -> list[dict]:
-    """Build a broader, URL-preserving evidence set for people/contact fill.
+    """Build URL-preserving evidence for business and people-profile fill.
 
     The normal report prompt is intentionally compact.  This pass keeps the
-    exact result URL and snippet for leadership/contact queries so the model
-    can distinguish a real public profile from a similarly named company.
+    exact result URL and snippet for business-profile and leadership/contact
+    queries so each claim can be tied back to a source for the exact company.
     """
     scraped = scraped or {}
     intel = intel or {}
@@ -3634,20 +3671,22 @@ def _ai_profile_evidence(
         )
 
     queries = [
-        f'"{company_name}" CEO',
-        f'"{company_name}" CTO OR "chief technology officer"',
-        f'"{company_name}" founder OR cofounder OR "co-founder"',
-        f'"{company_name}" leadership OR management OR executives',
-        f'"{company_name}" "point of contact" OR "business contact"',
-        f'"{company_name}" email OR phone',
-        f'"{company_name}" headquarters OR "head office" OR "corporate office"',
-        f'"{company_name}" founded OR established OR "founded in"',
+        f'"{company_name}" competitors',
+        f'"{company_name}" alternatives',
+        f'"{company_name}" products services customers',
+        f'"{company_name}" market position operating regions',
+        f'"{company_name}" CEO OR founder OR leadership',
+        f'"{company_name}" CTO OR management OR executives',
+        f'"{company_name}" "point of contact" OR email OR phone',
+        f'"{company_name}" headquarters OR "head office" OR founded',
         f'site:linkedin.com/company "{company_name}"',
         f'site:linkedin.com/in "{company_name}" CEO OR CTO OR founder',
         f'site:theorg.com "{company_name}"',
         f'"{company_name}" current director OR president',
     ]
     if not RESEARCH_DEEP:
+        # The bounded path reserves four queries for market/product evidence
+        # and four for leadership, contact, and company profile evidence.
         queries = queries[:8]
 
     def _search(query: str) -> list:
@@ -3790,7 +3829,7 @@ Rules:
             temperature=0.1,
             max_tokens=2200,
             json_mode=True,
-            timeout=90.0,
+            timeout=PROFILE_LLM_TIMEOUT,
             reasoning_effort="low",
         )
         candidate = _parse_llm_json(raw)
@@ -3808,6 +3847,7 @@ Rules:
         candidate=candidate,
         evidence=evidence,
         existing_leaders=report.get("leadership_team") or [],
+        timeout=PROFILE_JUDGE_TIMEOUT,
     )
     if verdict.get("_error"):
         base_result["status"] = "judge_unavailable"
@@ -3819,6 +3859,11 @@ Rules:
     existing_keys = {(str(l.get("name") or "").strip().lower()) for l in existing_rows if isinstance(l, dict)}
     added = 0
     accepted_source_urls = []
+    profile_evidence_urls = {
+        str(item.get("url") or "").strip()
+        for item in evidence
+        if isinstance(item, dict) and str(item.get("url") or "").strip().startswith(("http://", "https://"))
+    }
 
     def _ai_status_source(status: str) -> str:
         if status == "evidence-verified":
@@ -4081,7 +4126,15 @@ Rules:
     for row in business.get("competitor_candidates") or []:
         if not isinstance(row, dict) or not row.get("name"):
             continue
-        urls = [u for u in (row.get("source_urls") or []) if isinstance(u, str)]
+        status = str(row.get("verification_status") or "model-knowledge-reviewed")
+        urls = [
+            u for u in (row.get("source_urls") or [])
+            if isinstance(u, str) and u in profile_evidence_urls
+        ]
+        # Do not send model-memory-only names to the UI. Keep competitor leads
+        # only when the profile judge tied the name to a retrieved public source.
+        if status not in ("evidence-verified", "search-snippet-supported") or not urls:
+            continue
         accepted_source_urls.extend(urls)
         candidate = {
             "name": str(row.get("name") or "").strip(),
@@ -4089,17 +4142,12 @@ Rules:
             "market_location": str(row.get("market_location") or "").strip(),
             "overlap_reason": str(row.get("overlap_reason") or "").strip(),
             "confidence": row.get("confidence") or "Medium",
-            "verification_status": row.get("verification_status") or "model-knowledge-reviewed",
+            "verification_status": status,
             "source_urls": urls,
             "reason": row.get("reason") or "Reviewed by the AI profile judge",
         }
         if not candidate["name"]:
             continue
-        # This fallback can suggest likely peers, but a competitor must not be
-        # promoted into the verified list merely because its name appeared in a
-        # search snippet. The primary report judge owns evidence-backed comps.
-        candidate["verification_status"] = "model-knowledge-reviewed"
-        candidate["confidence"] = "Medium"
         competitor_candidates.append(candidate)
     report["competitor_candidates"] = competitor_candidates[:4]
     competitor_candidates_added = len(competitor_candidates[:4])
@@ -4206,7 +4254,7 @@ Rules:
                 {"role": "system", "content": "Return valid JSON only. Public officers of this exact company; omit any role that is not supported by reliable evidence."},
                 {"role": "user", "content": extract_prompt},
             ],
-            temperature=0.1, max_tokens=1400, json_mode=True, timeout=80.0,
+            temperature=0.1, max_tokens=1400, json_mode=True, timeout=80.0 if RESEARCH_DEEP else 35.0,
             reasoning_effort="low",
         )
         extracted = _parse_llm_json(raw)
@@ -4241,7 +4289,7 @@ Return ONLY JSON:
                     {"role": "system", "content": "Return valid JSON only. Sitting public officers of this exact company; return an empty list when unsupported."},
                     {"role": "user", "content": retry_prompt},
                 ],
-                temperature=0.0, max_tokens=600, json_mode=True, timeout=50.0,
+                temperature=0.0, max_tokens=600, json_mode=True, timeout=50.0 if RESEARCH_DEEP else 25.0,
                 reasoning_effort="low",
             )
             retry = _parse_llm_json(raw_r)
@@ -4265,7 +4313,7 @@ Return ONLY JSON:
                     {"role": "system", "content": "Return valid JSON only. Sitting board chair of this exact company."},
                     {"role": "user", "content": chair_prompt},
                 ],
-                temperature=0.0, max_tokens=400, json_mode=True, timeout=40.0,
+                temperature=0.0, max_tokens=400, json_mode=True, timeout=40.0 if RESEARCH_DEEP else 25.0,
                 reasoning_effort="low",
             )
             extra = _parse_llm_json(raw_c)
@@ -4314,7 +4362,7 @@ Judge rules:
                 {"role": "system", "content": "Return valid JSON only. You are a strict verifier. Keep only public officers supported for this exact firm; empty is valid when uncertain."},
                 {"role": "user", "content": verify_prompt},
             ],
-            temperature=0.0, max_tokens=1200, json_mode=True, timeout=80.0,
+            temperature=0.0, max_tokens=1200, json_mode=True, timeout=80.0 if RESEARCH_DEEP else 35.0,
             reasoning_effort="low",
         )
         verified = _parse_llm_json(raw2)
@@ -4646,6 +4694,7 @@ def _mcp_discover_urls(company_name: str, domain: str) -> list:
             f'"{company_name}" company overview',
             f"site:linkedin.com/company {company_name}",
             f"{company_name} {domain} competitors",
+            f'"{company_name}" alternatives',
             f"{company_name} news",
             f'"{company_name}" CEO OR founder',
         ]
@@ -4653,6 +4702,7 @@ def _mcp_discover_urls(company_name: str, domain: str) -> list:
     else:
         site_queries = [
             f'"{company_name}" competitors',
+            f'"{company_name}" alternatives',
             f'"{company_name}" news',
         ]
         max_results = 2
@@ -4969,7 +5019,7 @@ Return ONLY compact JSON. IMPORTANT schema rules:
 - leadership_team: array of {{"name","role","source","confidence","background"}} for people supported by Wikipedia/website/leadership sources or clearly domain-matched public evidence. If evidence is missing, return an empty array; never fill a role from memory.
 - risk_assessment: overall_risk_level plus regulatory/competitive/operational/reputational_risks as arrays of {{"risk","source","confidence","evidence_url","basis"}}. Do not infer a company-specific risk from generic industry assumptions.
 - financial_data: revenue/funding only if found in retrieved source text or domain-matched Wikidata; else Not publicly available. Never infer a funding stage or profitability.
-- recent_news: up to 4 objects with title, publication date, source_url, summary, and confidence. Only include dated, company-specific items supported by the supplied sources; do not invent news.
+- recent_news: up to 4 company-specific news items or events with a date, source_url, summary, kind (news/event), and confidence. Only include items supported by supplied sources; upcoming dates are allowed only for clearly identified events. Do not invent news or events.
 - intelligence_score: {{"overall","data_completeness","source_reliability","summary"}}
 Do NOT wrap whole sections in a single {{value,source,confidence}} object.
 Never invent people or exact revenue/funding numbers. No CIN / MCA fields."""
@@ -4990,7 +5040,7 @@ def _analyze_with_llm(prompt: str) -> dict:
         safe_prompt = safe_prompt[:8000]
 
     max_tok = 3500
-    llm_timeout = 50.0
+    llm_timeout = REPORT_LLM_TIMEOUT
 
     def _call(prompt_text: str, tokens: int = max_tok) -> str:
         return llm_client.chat(
@@ -5675,6 +5725,7 @@ def _apply_llm_judge(
         report=report,
         wikidata_hint=wd,
         public_evidence=public_evidence,
+        timeout=REPORT_JUDGE_TIMEOUT,
     )
     judge_available = not bool(verdict.get("_error"))
     print(
@@ -6581,7 +6632,7 @@ Rules:
                 {"role": "system", "content": "Return valid JSON only. Public hiring pages of this employer."},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.1, max_tokens=700, json_mode=True, timeout=50.0,
+            temperature=0.1, max_tokens=700, json_mode=True, timeout=HIRING_LLM_TIMEOUT,
             reasoning_effort="low",
         )
         data = _parse_llm_json(raw)
@@ -6615,7 +6666,8 @@ def _judge_hiring_rows(company_name: str, domain: str, rows: list) -> list:
     try:
         from backend.services import llm_judge
         verdict = llm_judge.judge_hiring_signals(
-            company_name=company_name, domain=domain, signals=rows
+            company_name=company_name, domain=domain, signals=rows,
+            timeout=HIRING_JUDGE_TIMEOUT,
         )
         if verdict.get("_error"):
             print("[Research] Hiring judge unavailable; keeping source-filtered signals")
@@ -6786,6 +6838,220 @@ def _parse_public_news_date(value: Any) -> datetime | None:
     return None
 
 
+def _news_date_from_html(html: str, prefer_event_date: bool = False) -> str:
+    """Read an explicitly published date from article metadata, not the search snippet."""
+    if not html:
+        return ""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return ""
+
+    candidates, event_dates = [], []
+    date_keys = {
+        "article:published_time", "og:published_time", "datepublished",
+        "publishdate", "pubdate", "parsely-pub-date", "date", "startdate", "event:start_time",
+    }
+    for node in soup.find_all("meta"):
+        key = str(node.get("property") or node.get("name") or node.get("itemprop") or "").lower()
+        if key in date_keys:
+            destination = event_dates if key in {"startdate", "event:start_time"} else candidates
+            destination.append(node.get("content") or node.get("value") or "")
+    for node in soup.find_all("time"):
+        value = node.get("datetime") or node.get_text(" ", strip=True)
+        destination = event_dates if "startdate" in str(node.get("itemprop") or "").lower() else candidates
+        destination.append(value)
+
+    def collect_json_dates(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key).lower() in {"datepublished", "datecreated", "startdate"} and isinstance(child, str):
+                    destination = event_dates if str(key).lower() == "startdate" else candidates
+                    destination.append(child)
+                else:
+                    collect_json_dates(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_json_dates(child)
+
+    for script in soup.find_all("script", attrs={"type": re.compile("ld\\+json", re.I)}):
+        try:
+            collect_json_dates(json.loads(script.string or script.get_text()))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+    ordered_candidates = event_dates + candidates if prefer_event_date else candidates + event_dates
+    for value in ordered_candidates:
+        parsed = _parse_public_news_date(value)
+        if parsed:
+            return parsed.strftime("%Y-%m-%d")
+    return ""
+
+
+def _collect_company_news_events(company_name: str, domain: str) -> list[dict]:
+    """Bounded public search for dated news/events; only fetched pages become evidence."""
+    queries = (
+        ("News", f'"{company_name}" company news announcement press release'),
+        ("Event", f'"{company_name}" conference event webinar'),
+    )
+    candidates = []
+    seen_urls = set()
+
+    def search_for_kind(kind: str, query: str) -> list:
+        return _ddg_news_search(query, 3) if kind == "News" else _ddg_search(query, 3)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        search_futures = [pool.submit(search_for_kind, kind, query) for kind, query in queries]
+        for (kind, _), future in zip(queries, search_futures):
+            try:
+                results = future.result(timeout=7)
+            except Exception as exc:  # search is best-effort; the main report must continue
+                print(f"[Research] {kind} lookup failed: {exc}")
+                continue
+            for result in results or []:
+                if not isinstance(result, dict):
+                    continue
+                href = str(result.get("url") or result.get("href") or result.get("link") or "").strip()
+                parsed = urlparse(href)
+                host = (parsed.hostname or "").lower().removeprefix("www.")
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or not host
+                    or parsed.username
+                    or parsed.password
+                    or host in {"localhost", "127.0.0.1", "::1"}
+                    or host.endswith((".local", ".internal"))
+                    or auth.is_junk_citation(href)
+                ):
+                    continue
+                canonical = _canonical_public_url(href)
+                if not canonical or canonical in seen_urls:
+                    continue
+                title = str(result.get("title") or "").strip()
+                snippet = str(result.get("body") or result.get("snippet") or "").strip()
+                if not _blob_matches_brand(f"{title} {snippet}", company_name, domain):
+                    continue
+                seen_urls.add(canonical)
+                candidates.append({
+                    "kind": kind,
+                    "title": title[:180],
+                    "url": href,
+                    "domain": host,
+                    "snippet": snippet[:500],
+                })
+                if len(candidates) >= 6:
+                    break
+            if len(candidates) >= 6:
+                break
+
+    def fetch_public_page(url: str) -> dict:
+        """Fetch a small public HTML page while rejecting private-network targets."""
+        current = url
+        for _ in range(4):
+            parsed = urlparse(current)
+            host = (parsed.hostname or "").lower()
+            if parsed.scheme not in {"http", "https"} or not host or parsed.username or parsed.password:
+                return {}
+            if host in {"localhost", "localhost.localdomain"} or host.endswith((".local", ".internal")):
+                return {}
+            try:
+                address = ipaddress.ip_address(host)
+                addresses = [address]
+            except ValueError:
+                try:
+                    addresses = [
+                        ipaddress.ip_address(row[4][0])
+                        for row in socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+                    ]
+                except (OSError, ValueError):
+                    return {}
+            if not addresses or any(not address.is_global for address in addresses):
+                return {}
+            try:
+                with requests.get(
+                    current, headers=HEADERS, timeout=4, allow_redirects=False, stream=True
+                ) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        location = response.headers.get("Location") or ""
+                        if not location:
+                            return {}
+                        current = urljoin(current, location)
+                        continue
+                    if response.status_code != 200:
+                        return {}
+                    content_type = str(response.headers.get("Content-Type") or "").lower()
+                    if content_type and not any(x in content_type for x in ("text/html", "application/xhtml")):
+                        return {}
+                    chunks, total = [], 0
+                    for chunk in response.iter_content(chunk_size=16384):
+                        if not chunk:
+                            continue
+                        chunks.append(chunk)
+                        total += len(chunk)
+                        if total >= 1_500_000:
+                            break
+                    encoding = response.encoding or "utf-8"
+                    html = b"".join(chunks)[:1_500_000].decode(encoding, errors="replace")
+            except Exception:
+                return {}
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(html, "html.parser")
+                for tag in soup(["script", "style", "noscript", "svg", "iframe"]):
+                    tag.decompose()
+                lines = re.sub(r"[ \t\xa0]+", " ", soup.get_text(separator="\n", strip=True))
+                lines = re.sub(r"\n\s*\n+", "\n", lines).strip()
+                text = re.sub(r"\s+", " ", lines)[:5000]
+            except Exception:
+                return {}
+            return {"status": 200, "final_url": current, "text": text, "html": html}
+        return {}
+
+    def fetch_candidate(candidate: dict) -> dict | None:
+        fetched = fetch_public_page(candidate["url"])
+        text = str(fetched.get("text") or "")
+        if fetched.get("status") != 200 or len(text) < 100:
+            return None
+        if _is_blocked_page_text(str(fetched.get("title") or ""), text) or _is_illogical_text(text[:800]):
+            return None
+        title = candidate.get("title") or str(fetched.get("title") or "").strip()
+        if not _blob_matches_brand(f"{title} {text[:2500]}", company_name, domain):
+            return None
+        final_url = str(fetched.get("final_url") or candidate["url"])
+        host = urlparse(final_url).netloc.lower().removeprefix("www.")
+        if not host or auth.is_junk_citation(final_url):
+            return None
+        published_at = _news_date_from_html(
+            fetched.get("html") or "", prefer_event_date=candidate.get("kind") == "Event"
+        )
+        if not published_at:
+            return None
+        kind = "event" if candidate.get("kind") == "Event" and re.search(
+            r"\b(webinar|conference|summit|expo|trade show|forum|meetup|event)\b",
+            f"{title} {text[:1800]}",
+            re.I,
+        ) else "news"
+        return {
+            "title": title[:180],
+            "url": final_url,
+            "domain": host,
+            "category": "Events" if kind == "event" else "News",
+            "kind": kind,
+            "text": text[:5000],
+            "published_at": published_at,
+            "date_verified": True,
+            "emails": [],
+            "phones": [],
+            "retrieved": True,
+        }
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pages = [page for page in pool.map(fetch_candidate, candidates[:4]) if page]
+    print(f"[Research] Verified {len(pages)} dated public news/event pages")
+    return pages
+
+
 def _canonical_public_url(value: str) -> str:
     try:
         parsed = urlparse(str(value or "").strip())
@@ -6796,6 +7062,41 @@ def _canonical_public_url(value: str) -> str:
         return f"{host}{path}"
     except Exception:
         return ""
+
+
+def _merge_retrieved_news(report: dict, intel: dict) -> None:
+    """Put fetched/date-verified pages first; the final sanitizer still checks content."""
+    fetched = []
+    for page in (intel or {}).get("_scraped_pages") or []:
+        if not isinstance(page, dict) or not page.get("date_verified"):
+            continue
+        published_at = str(page.get("published_at") or "").strip()
+        if not _parse_public_news_date(published_at):
+            continue
+        fetched.append({
+            "title": page.get("title") or "Company update",
+            "date": published_at,
+            "source": page.get("domain") or "Public source",
+            "source_url": page.get("url") or "",
+            "summary": page.get("text") or "",
+            "kind": page.get("kind") or "news",
+            "confidence": "High",
+        })
+    existing = report.get("recent_news") or []
+    if isinstance(existing, dict):
+        existing = existing.get("value") if isinstance(existing.get("value"), list) else []
+    candidates = fetched + [item for item in existing if isinstance(item, dict)]
+    unique_news, seen_news = [], set()
+    for item in candidates:
+        key = (
+            str(item.get("title") or "").strip().lower(),
+            _canonical_public_url(str(item.get("source_url") or item.get("url") or "")),
+        )
+        if key in seen_news:
+            continue
+        seen_news.add(key)
+        unique_news.append(item)
+    report["recent_news"] = unique_news[:8]
 
 
 def _sanitize_recent_news(report: dict, company_name: str, domain: str, intel: dict) -> list[dict]:
@@ -6811,6 +7112,11 @@ def _sanitize_recent_news(report: dict, company_name: str, domain: str, intel: d
         for row in page_rows
         if isinstance(row, dict) and row.get("url") and row.get("retrieved") is not False and row.get("text")
     }
+    page_by_url = {
+        _canonical_public_url(str(row.get("url") or "")): row
+        for row in page_rows
+        if isinstance(row, dict) and row.get("url") and row.get("retrieved") is not False and row.get("text")
+    }
     rows = []
     seen = set()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -6821,6 +7127,7 @@ def _sanitize_recent_news(report: dict, company_name: str, domain: str, intel: d
         canonical = _canonical_public_url(source_url)
         if not canonical or canonical not in allowed_urls or auth.is_junk_citation(source_url):
             continue
+        source_page = page_by_url.get(canonical) or {}
         source_text = page_text.get(canonical, "")
         title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
         summary = re.sub(r"\s+", " ", str(item.get("summary") or item.get("description") or "")).strip()
@@ -6840,25 +7147,36 @@ def _sanitize_recent_news(report: dict, company_name: str, domain: str, intel: d
             matching_offsets = [source_text.lower().find(term) for term in title_terms if source_text.lower().find(term) >= 0]
             title_offset = min(matching_offsets) if matching_offsets else 0
         source_excerpt = source_text[title_offset:title_offset + 900]
-        date_text = str(item.get("date") or item.get("published_at") or item.get("published") or "").strip()
+        date_text = str(
+            item.get("date") or item.get("published_at") or item.get("published")
+            or source_page.get("published_at") or ""
+        ).strip()
         parsed_date = _parse_public_news_date(date_text)
-        if parsed_date:
+        metadata_date_verified = bool(source_page.get("date_verified")) and (
+            parsed_date is not None
+            and parsed_date.date() == (_parse_public_news_date(source_page.get("published_at")) or parsed_date).date()
+        )
+        if parsed_date and not metadata_date_verified:
             date_forms = {
                 parsed_date.strftime(fmt).lower()
                 for fmt in ("%Y-%m-%d", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y")
             }
             if not any(date_form in source_text.lower() for date_form in date_forms):
                 parsed_date = None
+        is_event = str(item.get("kind") or source_page.get("kind") or "").lower() in {"event", "events"}
+        date_status = "date-unverified"
         if parsed_date:
             if parsed_date > now.replace(hour=23, minute=59, second=59, microsecond=0):
+                if not is_event or (parsed_date - now).days > 548:
+                    continue
+                date_status = "date-verified-upcoming"
+            elif (now - parsed_date).days > 548:
                 continue
-            if (now - parsed_date).days > 548:
-                continue
+            else:
+                date_status = "date-verified"
             date_text = parsed_date.strftime("%Y-%m-%d")
-            date_status = "date-verified"
         else:
             date_text = "Date not verified"
-            date_status = "date-unverified"
         key = (title.lower(), canonical)
         if key in seen:
             continue
@@ -6872,11 +7190,16 @@ def _sanitize_recent_news(report: dict, company_name: str, domain: str, intel: d
             "summary": (_clean_snippet(source_excerpt, 360) or "")[:360],
             "confidence": item.get("confidence") or ("Medium" if parsed_date else "Low"),
         })
-    rows.sort(key=lambda row: (
-        row.get("date_status") != "date-verified",
-        -(_parse_public_news_date(row.get("date")).timestamp())
-        if _parse_public_news_date(row.get("date")) else 0,
-    ))
+    def news_order(row):
+        parsed = _parse_public_news_date(row.get("date"))
+        status = str(row.get("date_status") or "")
+        if status == "date-verified-upcoming":
+            return (1, parsed.timestamp() if parsed else float("inf"))
+        if status == "date-verified":
+            return (0, -parsed.timestamp() if parsed else 0)
+        return (2, 0)
+
+    rows.sort(key=news_order)
     return rows[:4]
 
 
@@ -6962,7 +7285,7 @@ Return JSON: {{"ai_conclusion":"...","signals_used":["one of: {', '.join(support
             temperature=0.0,
             max_tokens=320,
             json_mode=True,
-            timeout=35.0,
+            timeout=CONCLUSION_LLM_TIMEOUT,
             reasoning_effort="low",
         )
         data = _parse_llm_json(raw)
@@ -7077,9 +7400,13 @@ def run(url: str) -> dict:
     # background while the (slowest) main LLM call is in flight instead of one after another.
     # A result is only used if the inputs it was computed with are still the ones we need.
     prefetch_name = company_name
-    bg = ThreadPoolExecutor(max_workers=3, thread_name_prefix="prefetch")
+    bg = ThreadPoolExecutor(max_workers=4, thread_name_prefix="prefetch")
     f_hiring = bg.submit(_fetch_hiring_signals, prefetch_name, domain, scraped.get("careers_text") or "", scraped)
     f_leaders = bg.submit(_collect_leadership, prefetch_name, domain, scraped, intel)
+    # Search and fetch a small set of company-specific news/events while the
+    # main report model is working. The result is added only after page fetch
+    # and date verification; a search snippet alone is never shown as news.
+    f_news = bg.submit(_collect_company_news_events, prefetch_name, domain)
     # The dedicated AI profile pass below owns the evidence prompt when it is
     # enabled. Avoid starting the legacy four-query evidence sweep unless that
     # fallback is actually needed.
@@ -7100,6 +7427,19 @@ def run(url: str) -> dict:
         print(f"[Research] LLM failed ({e}) — using baseline scrape report with contacts")
         report = _baseline_report(url, company_name, scraped)
     print(f"[Research] Phase 3 done in {time.time()-t0:.1f}s")
+
+    try:
+        news_pages = f_news.result(timeout=8)
+    except Exception as e:  # bounded public search must not hold up the company report
+        print(f"[Research] News/events enrichment unavailable or timed out: {e}")
+        news_pages = []
+    if news_pages:
+        intel.setdefault("_scraped_pages", []).extend(news_pages)
+        intel.setdefault("_source_urls", []).extend({
+            "title": page.get("title") or "Company news/event",
+            "url": page.get("url") or "",
+            "category": page.get("category") or "News",
+        } for page in news_pages)
 
     # ALWAYS inject verified contacts from company site + public sites (filter junk)
     cd = scraped.get("contact_data") or {}
@@ -7158,6 +7498,7 @@ def run(url: str) -> dict:
 
     # Fix Groq schema drift so Overview / SWOT / etc. always render
     report = _normalize_report(report, scraped, company_name, url, intel)
+    _merge_retrieved_news(report, intel)
 
     # Leadership from public web + silent Azure gap-fill (never cite ChatGPT)
     scrape_blob = " ".join([
@@ -7252,9 +7593,8 @@ def run(url: str) -> dict:
         if isinstance(report.get("company_profile"), dict):
             report["company_profile"]["name"] = company_name
 
-    # The report judge is deliberately optional in fast mode.  Keep the
-    # full normalized model/site report available for the normal UI request;
-    # deep mode retains the stricter authenticity gate.
+    # The report judge runs in both modes by default. Only an explicit
+    # RESEARCH_SKIP_JUDGE setting takes this lightweight hard-filter path.
     if RESEARCH_SKIP_JUDGE:
         print("[Research] Phase 3b: LLM judge skipped (fast mode)")
         ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
@@ -7337,6 +7677,15 @@ def run(url: str) -> dict:
             "status": "ai_profile_used",
             "source_urls": (report.get("ai_enrichment") or {}).get("source_urls", []),
         }
+    elif RESEARCH_FAST and RESEARCH_AI_PROFILE_FALLBACK and ai_profile_failed:
+        # The dedicated profile pass already tried public evidence and its own
+        # judge. Repeating the legacy contact-model pair after a timeout adds
+        # latency without adding independent evidence; keep existing scraped
+        # contacts and report the enrichment as unavailable instead.
+        report["_contact_verification"] = {
+            "status": "ai_profile_unavailable",
+            "source_urls": [],
+        }
     else:
         report = _maybe_add_public_point_of_contact(
             report, company_name, domain, scraped, intel
@@ -7401,6 +7750,7 @@ def run(url: str) -> dict:
         seen_keys.add(key)
         uniq_hire.append(h)
     report["hiring_signals"] = uniq_hire[:8]
+    _merge_retrieved_news(report, intel)
     report["recent_news"] = _sanitize_recent_news(report, company_name, domain, intel)
 
     citations = []

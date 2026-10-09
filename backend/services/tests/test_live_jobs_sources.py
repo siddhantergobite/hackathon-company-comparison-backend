@@ -154,6 +154,45 @@ def test_scan_terms_do_not_encode_location_as_a_linkedin_keyword(monkeypatch):
     assert terms == ["AI engineer"]
 
 
+def test_single_selected_skill_expands_to_role_searches(monkeypatch):
+    monkeypatch.setattr(live_jobs, "search_queries_for_scan", lambda _bench: [])
+
+    terms, from_resumes = live_jobs._scan_search_terms(
+        {"people": {}}, ["Python"], []
+    )
+
+    assert terms == [
+        "Python",
+        "Python jobs",
+        "Python developer",
+        "Python engineer",
+        "Python software engineer",
+        "Python backend engineer",
+        "Python data engineer",
+        "Python machine learning engineer",
+    ]
+    assert from_resumes is False
+
+
+def test_skill_search_expansion_interleaves_multiple_selected_skills(monkeypatch):
+    monkeypatch.setattr(live_jobs, "search_queries_for_scan", lambda _bench: [])
+
+    terms, _ = live_jobs._scan_search_terms(
+        {"people": {}}, ["Python", "Java"], []
+    )
+
+    assert terms == [
+        "Python",
+        "Java",
+        "Python jobs",
+        "Java jobs",
+        "Python developer",
+        "Java developer",
+        "Python engineer",
+        "Java engineer",
+    ]
+
+
 def test_live_scan_filters_jobs_by_selected_skills_and_locations(monkeypatch):
     monkeypatch.setattr(live_jobs, "get_bench", lambda: {"people": {}})
     monkeypatch.setattr(live_jobs, "search_queries_for_scan", lambda _bench: ["software engineer"])

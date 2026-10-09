@@ -17,21 +17,26 @@ export default function PeoplePanel({ report }) {
   const leaders = asArray(report.leadership_team);
   const hiring = asArray(report.hiring_signals).filter((h) => h && h.role);
   const ai = report.ai_enrichment || {};
+  const profileReviewComplete = ['complete', 'complete_no_new_facts', 'ai_profile_used'].includes(ai.status);
 
   return (
     <>
       {ai.status && ai.status !== 'disabled' && (
         <div className="callout ai-profile-callout">
-          <strong>AI profile enrichment</strong>
+          <strong>Public-source profile review</strong>
           <p className="text-sm muted" style={{ marginTop: 6 }}>
-            {ai.summary || 'Missing leadership and contact fields were checked by a separate AI judge.'}
+            {profileReviewComplete
+              ? 'Retrieved public records and search results were reviewed for this company.'
+              : 'The public-source review did not complete. Use the links beside each fact to inspect its source.'}
           </p>
-          <p className="text-xs muted" style={{ marginTop: 6 }}>
-            Judge score: {ai.judge_score || 0}/100 - {ai.evidence_count || 0} public evidence records. AI-knowledge facts are labeled.
-          </p>
-          {(ai.business_fields_added || ai.competitor_candidates_added) > 0 && (
+          {profileReviewComplete && (
             <p className="text-xs muted" style={{ marginTop: 6 }}>
-              The AI pass supplemented {ai.business_fields_added || 0} missing stable profile fields and produced {ai.competitor_candidates_added || 0} unverified competitor lead(s). Names from model knowledge are suggestions, not confirmed current facts; emails and phone numbers are only retained when found verbatim in public evidence.
+              Evidence review: {ai.judge_score || 0}/100 - {ai.evidence_count || 0} public evidence records considered.
+            </p>
+          )}
+          {ai.business_fields_added > 0 && (
+            <p className="text-xs muted" style={{ marginTop: 6 }}>
+              The review supplemented {ai.business_fields_added} missing stable profile field(s). Email addresses and phone numbers are retained only when found in the linked public sources.
             </p>
           )}
         </div>
