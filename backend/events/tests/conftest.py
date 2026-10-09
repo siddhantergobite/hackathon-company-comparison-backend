@@ -25,6 +25,16 @@ TEST_DB = "event_data_pytest"
 def _mongo():
     from backend.events.config import get_settings
 
+    # Another test module may have imported settings from the project's .env
+    # before this throwaway database was configured.
+    os.environ.update({
+        "EVENT_MONGO_DB": TEST_DB,
+        "EVENT_MONGO_URI": "mongodb://localhost:27017",
+        "EVENT_ADMIN_API_KEY": "test-admin-key",
+        "EVENT_AI_ENABLED": "false",
+        "EVENT_INGEST_AUTO_APPROVE": "true",
+    })
+    get_settings.cache_clear()
     assert get_settings().event_mongo_db == TEST_DB, "tests must never run against a real database"
     try:
         get_client().admin.command("ping")

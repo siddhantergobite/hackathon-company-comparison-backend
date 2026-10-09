@@ -1,4 +1,6 @@
 import pytest
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 from backend.news.collectors.base import CollectorError
 from backend.news.collectors.newsapi import NewsApiCollector
@@ -74,7 +76,14 @@ def test_non_feed_content_is_reported_not_crashed():
 
 def test_rss_end_to_end_through_the_pipeline(db):
     src = make_source(db, name="Example Wire")
-    res = run_source(db, src, collector=RssCollector(client=Client(Resp(RSS))))
+    fresh_rss = RSS.replace(
+        b"Sat, 19 Sep 2026 10:00:00 GMT",
+        format_datetime(datetime.now(timezone.utc) - timedelta(days=1)).encode(),
+    ).replace(
+        b"Sat, 19 Sep 2026 09:00:00 GMT",
+        format_datetime(datetime.now(timezone.utc) - timedelta(days=1, minutes=1)).encode(),
+    )
+    res = run_source(db, src, collector=RssCollector(client=Client(Resp(fresh_rss))))
     assert res["counts"]["created"] == 2 and res["counts"]["invalid"] == 1
     doc = db["news"].find_one({"title": "OpenAI announces new AI model"})
     assert doc["url"] == "https://example.org/a" and doc["image_url"] == "https://example.org/a.jpg"
@@ -98,8 +107,9 @@ def test_newsapi_needs_a_key_and_a_scope():
 def test_newsapi_items_keep_the_real_publisher_name(db):
     import json
 
+    published = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace("+00:00", "Z")
     payload = {"status": "ok", "articles": [
-        {"title": "Central bank holds interest rates steady", "url": "https://reuters.com/x", "description": "The bank kept rates unchanged on Thursday, as expected.", "publishedAt": "2026-09-19T10:00:00Z", "urlToImage": "https://img/x.jpg", "source": {"name": "Reuters"}, "author": "A"},
+        {"title": "Central bank holds interest rates steady", "url": "https://reuters.com/x", "description": "The bank kept rates unchanged on Thursday, as expected.", "publishedAt": published, "urlToImage": "https://img/x.jpg", "source": {"name": "Reuters"}, "author": "A"},
         {"title": "[Removed]", "url": "https://removed.com", "source": {"name": "X"}},
     ]}
 

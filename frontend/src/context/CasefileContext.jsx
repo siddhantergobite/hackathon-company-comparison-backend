@@ -75,19 +75,39 @@ export function CasefileProvider({ children }) {
       uploadBrochure: (file) =>
         track('brochure', async () => setSlice('brochure', await api.brochureUpload(file))),
 
-      researchTarget: (url) => {
+      researchTarget: async (url) => {
         const requestId = ++targetRequestId.current;
 
         // A new target invalidates every target-dependent result immediately.
         // This prevents an old report/draft from being shown while the new
         // research is running or after the new request fails.
         setData((d) => ({ ...d, target: null, pitch: null, aeo: null, outreachLog: [] }));
-
-        return track('target', async () => {
+        setRequests((r) => ({ ...r, target: { loading: true, error: null } }));
+        try {
           const report = await api.companyResearch(url);
-          if (requestId !== targetRequestId.current) return;
+          if (requestId !== targetRequestId.current) return false;
           setSlice('target', report);
-        });
+          setRequests((r) => ({ ...r, target: { loading: false, error: null } }));
+          return true;
+        } catch (e) {
+          if (requestId !== targetRequestId.current) return false;
+          const message = e?.message || 'Something went wrong';
+          setRequests((r) => ({ ...r, target: { loading: false, error: message } }));
+          toast.error(message);
+          return false;
+        } finally {
+          if (requestId === targetRequestId.current) {
+            setRequests((r) => ({ ...r, target: { ...r.target, loading: false } }));
+          }
+        }
+      },
+
+      clearTargetResearch: () => {
+        // Editing the target to a different company invalidates the old report
+        // so it cannot be mistaken for results for the newly entered URL.
+        targetRequestId.current += 1;
+        setData((d) => ({ ...d, target: null, pitch: null, aeo: null, outreachLog: [] }));
+        setRequests((r) => ({ ...r, target: { loading: false, error: null } }));
       },
 
       generatePitch: () =>

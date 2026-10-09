@@ -14,17 +14,35 @@ import SourcesCard from '../components/target/SourcesCard';
 const RESEARCH_STEPS = [
   'Reading the company website',
   'Checking Wikipedia and Wikidata',
-  'Filling missing public leaders and contacts with AI knowledge',
+  'Filling missing profile gaps with AI and public evidence',
   'Structuring the report with AI',
-  'Judging each leadership and contact fact',
+  'Reviewing people, competitors, finance, SWOT, and risk claims',
 ];
 
+function normalizedHost(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  try {
+    const withScheme = /^https?:\/\//i.test(text) ? text : `https://${text}`;
+    return new URL(withScheme).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
 export default function TargetPage() {
-  const { target, requests, researchTarget } = useCasefile();
+  const { target, requests, researchTarget, clearTargetResearch } = useCasefile();
   const toast = useToast();
   const [url, setUrl] = useState('');
   const { loading, error } = requests.target || {};
   const view = useMemo(() => (target ? buildTargetView(target) : null), [target]);
+  const targetHost = normalizedHost(target?._meta?.queried_url || target?._meta?.domain);
+
+  const onUrlChange = (nextValue) => {
+    setUrl(nextValue);
+    const nextHost = normalizedHost(nextValue);
+    if (target && nextHost && targetHost && nextHost !== targetHost) clearTargetResearch();
+  };
 
   const onSearch = () => {
     let value = url.trim();
@@ -56,7 +74,7 @@ export default function TargetPage() {
         <div>
           <SearchBar
             value={url}
-            onChange={setUrl}
+            onChange={onUrlChange}
             onSubmit={onSearch}
             placeholder="https://www.sacpl.co/"
             buttonLabel="Research"

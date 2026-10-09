@@ -247,7 +247,7 @@ The final contact decision is cached briefly so repeated Research clicks do not 
 
 ### Live job result streaming
 
-Live Jobs returns up to 20 real public listings in five-row NDJSON batches. The first verified LinkedIn batch can appear while the remaining public-source checks continue; final batches arrive about 2 seconds apart and the completed response remains authoritative. Selected countries are sent to LinkedIn through its structured location parameter and then checked again against each card's location; they are not treated as a loose keyword. The UI merges batches by job URL, so a listing is never duplicated. If fewer than 20 listings survive date, source, and relevance checks, the app shows the smaller exact count rather than padding it with stale or invented jobs.
+Live Jobs streams validated listings in five-row NDJSON batches, searches for up to 50 results, and displays at most 20 results per page. It checks up to four LinkedIn pages per role query and up to eight public-search queries, applies selected-location filters to returned listing metadata, and merges batches by job URL. General scans use listing cards and snippets instead of fetching each job detail page; Naukri dates that cannot be verified are labeled separately and are not counted as fresh. Progress heartbeats keep the UI responsive while providers finish. The 50-item cap is not a promise that 50 current jobs exist: if public sources, recency checks, or user filters yield fewer, the app returns only those results.
 
 ---
 

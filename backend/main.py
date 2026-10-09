@@ -210,7 +210,7 @@ class LiveJobUrlRequest(BaseModel):
 
 
 async def _stream_live_jobs(worker):
-    """Run a blocking live-job search and forward five-row NDJSON batches."""
+    """Run a bounded live-job search and forward batches plus progress heartbeats."""
     loop = asyncio.get_running_loop()
     events = asyncio.Queue()
     stopped = False
@@ -237,21 +237,22 @@ async def _stream_live_jobs(worker):
             push(sentinel)
 
     task = asyncio.create_task(asyncio.to_thread(run_worker))
+    started_at = asyncio.get_running_loop().time()
     try:
         while True:
-            event = await events.get()
+            try:
+                event = await asyncio.wait_for(events.get(), timeout=10)
+            except asyncio.TimeoutError:
+                elapsed = int(asyncio.get_running_loop().time() - started_at)
+                yield json.dumps({
+                    "type": "progress",
+                    "stage": "Still checking public job sources",
+                    "elapsed_seconds": elapsed,
+                }) + "\n"
+                continue
             if event is sentinel:
                 break
             yield json.dumps(event, ensure_ascii=False, default=str) + "\n"
-            # A short pause makes the UI visibly progressive when several
-            # batches are already available, while the first batch is sent as
-            # soon as the worker publishes it.
-            if (
-                event.get("type") == "batch"
-                and event.get("phase") == "final"
-                and event.get("batch_index", 0) < event.get("batch_count", 0)
-            ):
-                await asyncio.sleep(2.2)
     finally:
         stopped = True
         if not task.done():

@@ -14,10 +14,16 @@ function SwotBox({ tone, title, items }) {
             <li key={`${text}-${i}`}>
               {text}
               {typeof item === 'object' && <CiteBadge field={item} />}
+              {typeof item === 'object' && item.basis === 'analysis' && (
+                <span className="cite-badge cite-badge--medium">Analysis based on cited evidence</span>
+              )}
+              {typeof item === 'object' && /^https?:\/\//i.test(String(item.source_url || '')) && (
+                <a className="text-xs" href={item.source_url} target="_blank" rel="noopener noreferrer">Source</a>
+              )}
             </li>
           ))
         ) : (
-          <li>—</li>
+          <li>No company-specific public evidence supported this category.</li>
         )}
       </ul>
     </div>

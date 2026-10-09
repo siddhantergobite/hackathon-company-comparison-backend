@@ -5,9 +5,11 @@ const confidenceTone = (c) => ({ high: 'high', medium: 'medium', med: 'medium', 
 const verificationLabel = (leader) =>
   leader?.verification_status === 'model-knowledge-reviewed'
     ? 'AI knowledge reviewed'
-    : leader?.verification_status === 'evidence-verified'
-      ? 'Evidence verified'
-      : '';
+    : leader?.verification_status === 'search-snippet-supported'
+      ? 'Search snippet only - page not fetched'
+      : leader?.verification_status === 'evidence-verified'
+        ? 'Evidence verified'
+        : '';
 
 export default function PeoplePanel({ report }) {
   const co = report.company_profile || {};
@@ -27,6 +29,11 @@ export default function PeoplePanel({ report }) {
           <p className="text-xs muted" style={{ marginTop: 6 }}>
             Judge score: {ai.judge_score || 0}/100 - {ai.evidence_count || 0} public evidence records. AI-knowledge facts are labeled.
           </p>
+          {(ai.business_fields_added || ai.competitor_candidates_added) > 0 && (
+            <p className="text-xs muted" style={{ marginTop: 6 }}>
+              The AI pass supplemented {ai.business_fields_added || 0} missing stable profile fields and produced {ai.competitor_candidates_added || 0} unverified competitor lead(s). Names from model knowledge are suggestions, not confirmed current facts; emails and phone numbers are only retained when found verbatim in public evidence.
+            </p>
+          )}
         </div>
       )}
       <h4 className="subhead">Workforce stats</h4>
@@ -49,6 +56,11 @@ export default function PeoplePanel({ report }) {
               <span className={`cite-badge cite-badge--${confidenceTone(l.confidence)}`}>● {l.confidence || 'Medium'}</span>
             </div>
             {l.background && <p className="text-xs muted" style={{ marginTop: 6 }}>{l.background}</p>}
+            {asArray(l.source_urls).filter((u) => /^https?:\/\//i.test(String(u))).slice(0, 2).map((u) => (
+              <a className="text-xs" href={u} target="_blank" rel="noopener noreferrer" key={u} style={{ marginRight: 8 }}>
+                Source
+              </a>
+            ))}
           </div>
         ))
       ) : (

@@ -336,6 +336,12 @@ def select_point_of_contact(report: dict) -> dict:
     emails = contacts.get("emails") or []
     phones = contacts.get("phones") or []
     leaders = rank_leadership(report.get("leadership_team") or [])
+    public_leaders = [
+        leader for leader in leaders
+        if leader.get("verification_status") != "model-knowledge-reviewed"
+        and leader.get("verification_status") != "search-snippet-supported"
+        and leader.get("provenance") not in {"ai-knowledge", "search-snippet"}
+    ]
     co = report.get("company_profile") or {}
     company = flatten_display(co.get("name")) or (report.get("_meta") or {}).get("company_name") or ""
 
@@ -355,6 +361,7 @@ def select_point_of_contact(report: dict) -> dict:
                 "confidence": judged_contact.get("confidence") or "Medium",
                 "source": judged_contact.get("source") or "Public contact judge",
                 "source_urls": judged_contact.get("source_urls") or [],
+                "verification_status": "evidence-verified",
             }
 
     # The dedicated AI profile pass may know a public executive even when the
@@ -362,9 +369,23 @@ def select_point_of_contact(report: dict) -> dict:
     # its explicit model-knowledge/evidence status so it is never mistaken for
     # a website-verified contact.
     ai_contact = (report.get("ai_enrichment") or {}).get("point_of_contact")
-    if isinstance(ai_contact, dict) and any(ai_contact.get(k) for k in ("name", "email", "phone")):
+    has_public_named_email = any(
+        isinstance(e, dict)
+        and e.get("email")
+        and (e.get("person") or e.get("person_name") or e.get("name"))
+        and e.get("verification_status") not in {"model-knowledge-reviewed", "search-snippet-supported"}
+        and e.get("provenance") not in {"ai-knowledge", "search-snippet"}
+        for e in emails
+    )
+    has_public_leader = any(isinstance(l, dict) and l.get("status") == "current" for l in public_leaders)
+    if (
+        isinstance(ai_contact, dict)
+        and not has_public_named_email
+        and not has_public_leader
+        and any(ai_contact.get(k) for k in ("name", "email", "phone"))
+    ):
         status = ai_contact.get("verification_status") or "model-knowledge-reviewed"
-        if status in ("evidence-verified", "model-knowledge-reviewed"):
+        if status in ("evidence-verified", "search-snippet-supported", "model-knowledge-reviewed"):
             return {
                 "name": (ai_contact.get("name") or "").strip(),
                 "title": ai_contact.get("title") or "",
@@ -377,12 +398,16 @@ def select_point_of_contact(report: dict) -> dict:
                 "source_urls": ai_contact.get("source_urls") or [],
                 "verification_status": status,
                 "verification_score": ai_contact.get("verification_score") or 0,
-                "provenance": ai_contact.get("provenance") or "ai-knowledge",
+                "provenance": ai_contact.get("provenance") or (
+                    "search-snippet" if status == "search-snippet-supported" else "ai-knowledge"
+                ),
             }
 
     named_email = None
     for e in emails:
         if not isinstance(e, dict):
+            continue
+        if e.get("verification_status") in {"model-knowledge-reviewed", "search-snippet-supported"} or e.get("provenance") in {"ai-knowledge", "search-snippet"}:
             continue
         person = (e.get("person") or e.get("person_name") or e.get("name") or "").strip()
         em = (e.get("email") or "").strip()
@@ -396,18 +421,18 @@ def select_point_of_contact(report: dict) -> dict:
                 break
 
     exec_ = None
-    for l in leaders:
+    for l in public_leaders:
         if l.get("status") == "current" and _CURRENT_CEO.search(l.get("role") or ""):
             exec_ = l
             break
     if not exec_:
-        for l in leaders:
+        for l in public_leaders:
             if l.get("status") == "current" and _CURRENT_CSuite.search(l.get("role") or ""):
                 exec_ = l
                 break
     if not exec_:
         # Founder-led firms often list no CEO title at all
-        for l in leaders:
+        for l in public_leaders:
             if l.get("status") == "current" and re.search(r"(?i)co-?founder|founder", l.get("role") or ""):
                 exec_ = l
                 break
@@ -431,14 +456,26 @@ def select_point_of_contact(report: dict) -> dict:
     for p in phones:
         if not isinstance(p, dict):
             continue
+        if p.get("verification_status") in {"model-knowledge-reviewed", "search-snippet-supported"} or p.get("provenance") in {"ai-knowledge", "search-snippet"}:
+            continue
         pn = (p.get("person") or p.get("person_name") or p.get("name") or "").lower()
         if first and first in pn:
             phone = p.get("number") or ""
             if not name:
                 name = p.get("person") or p.get("person_name") or p.get("name") or ""
             break
-    if not phone and phones:
-        p0 = phones[0]
+    public_phones = [
+        p for p in phones
+        if not isinstance(p, dict)
+        or (
+            p.get("verification_status") not in {"model-knowledge-reviewed", "search-snippet-supported"}
+            and p.get("provenance") not in {"ai-knowledge", "search-snippet"}
+        )
+    ]
+    # Do not attach a generic company switchboard number to a named executive.
+    # Keep it available in the general contacts list instead.
+    if not phone and not name and public_phones:
+        p0 = public_phones[0]
         phone = p0.get("number") if isinstance(p0, dict) else str(p0)
 
     # If name came from historical founder only, blank it
@@ -448,6 +485,7 @@ def select_point_of_contact(report: dict) -> dict:
             name, title = "", ""
             reason = "Historical founder is not a business point of contact"
 
+    selected_source = named_email or exec_ or {}
     return {
         "name": name,
         "title": title,
@@ -456,8 +494,11 @@ def select_point_of_contact(report: dict) -> dict:
         "company": company,
         "reason": reason,
         "confidence": "High" if email or (name and exec_) else "Low",
-        "source": (named_email or {}).get("source") if named_email else (exec_ or {}).get("source", ""),
-        "source_urls": (named_email or {}).get("source_urls", []) if named_email else [],
+        "source": selected_source.get("source") or "",
+        "source_urls": selected_source.get("source_urls") or [],
+        "verification_status": selected_source.get("verification_status") or "",
+        "verification_score": selected_source.get("verification_score") or 0,
+        "provenance": selected_source.get("provenance") or "",
     }
 
 
@@ -714,16 +755,33 @@ def sanitize_revenue(raw: Any) -> str:
 def normalize_geographic_reach(raw: Any, hq: str = "", description: str = "") -> dict:
     text = flatten_display(raw)
     blob = f"{text} {hq} {description}".lower()
+
+    def _preserve_provenance(result: dict) -> dict:
+        # Final report normalization runs after the AI profile pass. Keep its
+        # verification label and references when flattening this field for UI.
+        if isinstance(raw, dict):
+            for key in (
+                "verification_status", "source_urls", "reason", "provenance",
+                "verification_score",
+            ):
+                if key in raw:
+                    result[key] = raw[key]
+            if raw.get("source"):
+                result["source"] = raw["source"]
+            if raw.get("confidence"):
+                result["confidence"] = raw["confidence"]
+        return result
+
     if text and "not publicly" not in text.lower() and "[object" not in text.lower():
         conf = "Medium"
         if any(w in blob for w in ("worldwide", "global", "multinational", "international")):
             conf = "High"
-        return field(text, "Public sources", conf)
+        return _preserve_provenance(field(text, "Public sources", conf))
     if any(w in blob for w in ("worldwide", "global", "multinational", "international")):
-        return field("Global", "Public sources", "Medium")
+        return _preserve_provenance(field("Global", "Public sources", "Medium"))
     if hq and "not publicly" not in hq.lower():
-        return field(f"Headquartered in {hq}", "Company profile", "Medium")
-    return field("Not publicly available", "Public sources", "Low")
+        return _preserve_provenance(field(f"Headquartered in {hq}", "Company profile", "Medium"))
+    return _preserve_provenance(field("Not publicly available", "Public sources", "Low"))
 
 
 # ── honest scoring ───────────────────────────────────────────────────────────

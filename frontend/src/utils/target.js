@@ -29,6 +29,18 @@ export function bestPoc(report) {
   const contacts = report.contact_intelligence || {};
   const emails = asArray(contacts.emails);
   const phones = asArray(contacts.phones);
+  const publicEmails = emails.filter((e) =>
+    !(e && typeof e === 'object' && (
+      ['model-knowledge-reviewed', 'search-snippet-supported'].includes(e.verification_status) ||
+      ['ai-knowledge', 'search-snippet'].includes(e.provenance)
+    )),
+  );
+  const publicPhones = phones.filter((p) =>
+    !(p && typeof p === 'object' && (
+      ['model-knowledge-reviewed', 'search-snippet-supported'].includes(p.verification_status) ||
+      ['ai-knowledge', 'search-snippet'].includes(p.provenance)
+    )),
+  );
 
   let name = '';
   let title = '';
@@ -36,8 +48,8 @@ export function bestPoc(report) {
   let phone = '';
 
   const namedEmail =
-    emails.find((e) => typeof e === 'object' && e && hasData(e.person_name || e.person || e.name)) ||
-    emails[0];
+    publicEmails.find((e) => typeof e === 'object' && e && hasData(e.person_name || e.person || e.name)) ||
+    publicEmails[0];
 
   if (namedEmail) {
     if (typeof namedEmail === 'string') {
@@ -51,11 +63,11 @@ export function bestPoc(report) {
 
   const firstName = name.split(/\s+/)[0]?.toLowerCase() || '';
   const matchedPhone =
-    phones.find((p) => {
+    publicPhones.find((p) => {
       if (typeof p !== 'object' || !p) return false;
       const pn = (p.person_name || p.name || '').toLowerCase();
       return firstName && pn.includes(firstName);
-    }) || phones[0];
+    }) || publicPhones[0];
 
   if (matchedPhone) {
     phone = typeof matchedPhone === 'string' ? matchedPhone : matchedPhone.number || '';
@@ -65,7 +77,11 @@ export function bestPoc(report) {
   }
 
   if (!name && !email) {
-    const leaders = asArray(report.leadership_team).filter((l) => l && l.name);
+    const leaders = asArray(report.leadership_team).filter((l) =>
+      l && l.name &&
+      !['model-knowledge-reviewed', 'search-snippet-supported'].includes(l.verification_status) &&
+      !['ai-knowledge', 'search-snippet'].includes(l.provenance),
+    );
     const current = leaders.filter((l) => l.status !== 'historical');
     const exec =
       current.find((l) => /ceo|chief executive|managing director|\bmd\b|president/i.test(l.role || '')) ||
@@ -120,6 +136,7 @@ export function buildTargetView(report) {
     heroSub: [industry, val(co.founded)].filter(hasData).join(' · ') || meta.domain || '',
     heroSummary,
     conclusion: flattenVal(report.ai_conclusion) || summaryText || heroSummary || '—',
+    conclusionSource: report.ai_conclusion_source || '',
     overall,
     completeness,
     reliability,

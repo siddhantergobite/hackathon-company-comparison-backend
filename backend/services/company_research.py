@@ -9,8 +9,10 @@ Phase 5 — REPORT    : Structured deep intelligence JSON
 """
 
 import os, re, json, time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+from typing import Any
 from urllib.parse import urlparse, urljoin
 import requests
 from dotenv import load_dotenv
@@ -3119,7 +3121,14 @@ def _public_contact_evidence(
         cd = (domain or "").lower().replace("www.", "")
         return bool(cd and (host == cd or host.endswith("." + cd)))
 
-    def _add(href: str, title: str, snippet: str, source: str = "Public web") -> None:
+    def _add(
+        href: str,
+        title: str,
+        snippet: str,
+        source: str = "Public web",
+        *,
+        retrieved: bool = True,
+    ) -> None:
         href = str(href or "").strip()
         if not href.startswith(("http://", "https://")):
             return
@@ -3141,6 +3150,7 @@ def _public_contact_evidence(
             "title": title[:180],
             "snippet": snippet[:900],
             "source": source[:100],
+            "retrieved": bool(retrieved),
         })
 
     cd = scraped.get("contact_data") or {}
@@ -3197,6 +3207,15 @@ def _public_contact_evidence(
             "Wikidata",
         )
 
+    for page in (intel.get("_scraped_pages") or [])[:12]:
+        _add(
+            page.get("url") or "",
+            page.get("title") or page.get("domain") or "Public company profile",
+            page.get("text") or page.get("snippet") or "",
+            page.get("category") or "Public web",
+            retrieved=page.get("retrieved") is not False and bool(page.get("text")),
+        )
+
     # Search is the recovery path when the company site does not publish a
     # contact.  Run the bounded queries concurrently and keep only branded hits.
     queries = [
@@ -3225,6 +3244,7 @@ def _public_contact_evidence(
                     title,
                     f"{body} Search query: {query}",
                     _site_category(href, domain) if href else "Public Web",
+                    retrieved=False,
                 )
 
     # Official pages and structured records are more useful to the judge than
@@ -3527,7 +3547,14 @@ def _ai_profile_evidence(
         base = (domain or "").lower().replace("www.", "")
         return bool(base and (host == base or host.endswith("." + base)))
 
-    def _add(href: str, title: str, snippet: str, source: str = "Public web") -> None:
+    def _add(
+        href: str,
+        title: str,
+        snippet: str,
+        source: str = "Public web",
+        *,
+        retrieved: bool = True,
+    ) -> None:
         href = str(href or "").strip()
         if not href.startswith(("http://", "https://")) or any(x in href.lower() for x in blocked):
             return
@@ -3548,6 +3575,7 @@ def _ai_profile_evidence(
             "title": title[:180],
             "snippet": snippet[:1000],
             "source": (source or auth.classify_source(href, domain))[:100],
+            "retrieved": bool(retrieved),
         })
 
     structured = scraped.get("_structured") or {}
@@ -3602,6 +3630,7 @@ def _ai_profile_evidence(
             page.get("title") or page.get("domain") or "Public company profile",
             page.get("text") or page.get("snippet") or "",
             page.get("category") or "Public web",
+            retrieved=page.get("retrieved") is not False and bool(page.get("text")),
         )
 
     queries = [
@@ -3639,6 +3668,7 @@ def _ai_profile_evidence(
                     row.get("title") or "Public search result",
                     f"{row.get('body') or row.get('snippet') or ''} Search query: {query}",
                     auth.classify_source(href, domain) if href else "Public Web",
+                    retrieved=False,
                 )
 
     records.sort(key=lambda r: (0 if _same_company(r.get("url") or "") else 1, r.get("url") or ""))
@@ -3652,7 +3682,7 @@ def _run_ai_profile_fallback(
     scraped: dict,
     intel: dict,
 ) -> dict:
-    """Fill missing people/contact facts, then attach judge metadata.
+    """Fill missing profile facts, then attach judge metadata.
 
     Model-knowledge facts are deliberately not disguised as website facts.  A
     user can see them, but the UI receives the verification status and score so
@@ -3685,7 +3715,14 @@ def _run_ai_profile_fallback(
     ]
     contact = report.get("contact_intelligence") if isinstance(report.get("contact_intelligence"), dict) else {}
     company_profile = report.get("company_profile") if isinstance(report.get("company_profile"), dict) else {}
-    candidate_prompt = f"""Build a public leadership and contact candidate for this exact company.
+    products = report.get("products_services") if isinstance(report.get("products_services"), dict) else {}
+    market = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+    tech = report.get("tech_stack") if isinstance(report.get("tech_stack"), dict) else {}
+    current_offerings = [
+        (row.get("item") or row.get("value") or "") if isinstance(row, dict) else str(row)
+        for row in (products.get("primary_offerings") or [])[:6]
+    ]
+    candidate_prompt = f"""Build a public company-profile candidate for this exact company.
 
 COMPANY: {company_name}
 WEBSITE: https://{domain}/
@@ -3699,6 +3736,15 @@ CURRENT PROFILE: {json.dumps({
     'headquarters': _field_text(company_profile.get('headquarters')),
     'founded': _field_text(company_profile.get('founded')),
 }, ensure_ascii=False)}
+CURRENT BUSINESS PROFILE: {json.dumps({
+    'description': _field_text(company_profile.get('description')),
+    'industry': _field_text(market.get('industry') or company_profile.get('industry')),
+    'products_services': current_offerings,
+    'market_position': _field_text(market.get('market_position')),
+    'geographic_reach': _field_text(market.get('geographic_reach')),
+    'website_technology_detected': _field_text(tech.get('website_cms') or tech.get('cms')),
+    'competitors_already_supported': [c.get('name') for c in (report.get('competitors') or [])[:6] if isinstance(c, dict)],
+}, ensure_ascii=False)[:3200]}
 
 PUBLIC EVIDENCE (snippets and URLs):
 {json.dumps(evidence, ensure_ascii=False)[:14000] or '[]'}
@@ -3708,7 +3754,13 @@ Return ONLY JSON:
   "leadership": [{{"name":"Full Name","role":"CEO|CTO|CFO|COO|Founder|Co-founder|Chairperson|President|Managing Director|Director","status":"current|historical","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}}],
   "point_of_contact": {{"name":"","title":"","email":"","phone":"","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}},
   "headquarters": "city, country or empty",
-  "founded": "YYYY or empty"
+  "founded": "YYYY or empty",
+  "business_profile": {{
+    "products_services": [{{"item":"...","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}}],
+    "market_position": {{"value":"...","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}},
+    "geographic_reach": {{"value":"...","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}},
+    "competitor_candidates": [{{"name":"...","official_domain":"... or empty","market_location":"... or empty","overlap_reason":"...","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}}]
+  }}
 }}
 
 Rules:
@@ -3718,6 +3770,9 @@ Rules:
 - Historical founders must be status=historical and must not be the POC unless still operating.
 - Never invent an email or phone. Only copy exact values visible in PUBLIC EVIDENCE.
 - Never use private data, guessed email patterns, or a similarly named company.
+- For products, market position, reach, and competitors, separate retrieved evidence from model knowledge; model-knowledge results are suggestions, not verified facts.
+- Competitor candidates must overlap in business domain and actual operating market; do not fill a quota. Leave official_domain empty unless known with confidence.
+- Do not use model memory for latest news, current hiring, revenue/funding numbers, email addresses, or phone numbers. Those require current public evidence.
 - Empty is correct when the identity is not unambiguous.
 """
     try:
@@ -3764,6 +3819,14 @@ Rules:
     existing_keys = {(str(l.get("name") or "").strip().lower()) for l in existing_rows if isinstance(l, dict)}
     added = 0
     accepted_source_urls = []
+
+    def _ai_status_source(status: str) -> str:
+        if status == "evidence-verified":
+            return "Public evidence + AI judge"
+        if status == "search-snippet-supported":
+            return "Search snippet only; page not fetched"
+        return "AI knowledge suggestion - unverified"
+
     for row in verdict.get("leadership") or []:
         if not isinstance(row, dict) or not row.get("name"):
             continue
@@ -3774,7 +3837,7 @@ Rules:
         if key in existing_keys:
             continue
         status = row.get("verification_status") or "model-knowledge-reviewed"
-        source = "Public evidence + AI judge" if status == "evidence-verified" else "AI public knowledge + AI judge"
+        source = _ai_status_source(status)
         existing_rows.append({
             "name": str(name).strip(),
             "role": str(row.get("role") or "Leadership").strip(),
@@ -3786,7 +3849,11 @@ Rules:
             "background": row.get("reason") or "Reviewed by the AI profile judge",
             "status": row.get("status") or "current",
             "is_current": (row.get("status") or "current") == "current",
-            "provenance": "public-evidence" if status == "evidence-verified" else "ai-knowledge",
+            "provenance": (
+                "public-evidence" if status == "evidence-verified"
+                else "search-snippet" if status == "search-snippet-supported"
+                else "ai-knowledge"
+            ),
         })
         existing_keys.add(key)
         added += 1
@@ -3814,50 +3881,113 @@ Rules:
                 break
 
     if ai_poc.get("name") or ai_poc.get("email") or ai_poc.get("phone"):
+        # Keep a model-known executive separate from contact details. A public
+        # email or phone may be copied into the contact list only when its exact
+        # value appears in the evidence; attach a person's name only when the
+        # same evidence record contains both the name and the contact value.
+        poc_status = ai_poc.get("verification_status") or "model-knowledge-reviewed"
+        poc_name = str(ai_poc.get("name") or "").strip()
+        candidate_email = str(ai_poc.get("email") or "").strip().lower()
+        candidate_phone = str(ai_poc.get("phone") or "").strip()
+        evidence_rows = [row for row in evidence if isinstance(row, dict)]
+
+        def _matching_contact_rows(value: str, *, phone_value: bool = False) -> list[dict]:
+            if not value:
+                return []
+            matches = []
+            for evidence_row in evidence_rows:
+                evidence_text = " ".join((
+                    str(evidence_row.get("title") or ""),
+                    str(evidence_row.get("snippet") or ""),
+                ))
+                if phone_value:
+                    found = llm_judge._phone_literal_in_text(value, evidence_text)
+                else:
+                    found = value.lower() in evidence_text
+                if found:
+                    matches.append(evidence_row)
+            return matches
+
+        email_rows = _matching_contact_rows(candidate_email)
+        phone_rows = _matching_contact_rows(candidate_phone, phone_value=True)
+        name_in_evidence = any(
+            poc_name.lower() in " ".join((str(row.get("title") or ""), str(row.get("snippet") or ""))).lower()
+            for row in evidence_rows
+        ) if poc_name else False
+        email_named_rows = [
+            row for row in email_rows
+            if poc_name and poc_name.lower() in " ".join((str(row.get("title") or ""), str(row.get("snippet") or ""))).lower()
+        ]
+        phone_named_rows = [
+            row for row in phone_rows
+            if poc_name and poc_name.lower() in " ".join((str(row.get("title") or ""), str(row.get("snippet") or ""))).lower()
+        ]
         ai_poc["source"] = (
             "Public evidence + AI judge"
-            if ai_poc.get("verification_status") == "evidence-verified"
-            else "AI public knowledge + AI judge"
+            if poc_status == "evidence-verified"
+            else "Search snippet only; page not fetched"
+            if poc_status == "search-snippet-supported"
+            else "AI knowledge suggestion - unverified"
         )
-        ai_poc["verified"] = ai_poc.get("verification_status") == "evidence-verified"
-        ai_poc["provenance"] = "public-evidence" if ai_poc["verified"] else "ai-knowledge"
+        ai_poc["verification_status"] = poc_status
+        ai_poc["verified"] = poc_status == "evidence-verified" and name_in_evidence
+        ai_poc["provenance"] = (
+            "public-evidence" if ai_poc["verified"]
+            else "search-snippet" if poc_status == "search-snippet-supported"
+            else "ai-knowledge"
+        )
         ai_poc["source_urls"] = [u for u in (ai_poc.get("source_urls") or []) if isinstance(u, str) and u]
+        # Never associate a model-memory name with an unrelated public inbox or
+        # switchboard number. Exact values can still be retained as generic
+        # company contacts when they are present in the supplied evidence.
+        ai_poc["email"] = candidate_email if any(row.get("retrieved") for row in email_named_rows) and poc_status == "evidence-verified" else ""
+        ai_poc["phone"] = candidate_phone if any(row.get("retrieved") for row in phone_named_rows) and poc_status == "evidence-verified" else ""
         accepted_source_urls.extend(ai_poc.get("source_urls") or [])
         ci = report.get("contact_intelligence") if isinstance(report.get("contact_intelligence"), dict) else {}
         emails = list(ci.get("emails") or [])
-        email = str(ai_poc.get("email") or "").strip().lower()
-        if email and _email_domain_ok(email, domain) and not any(
+        email = candidate_email if email_rows and _email_domain_ok(candidate_email, domain) else ""
+        email_is_named = bool(email and any(row.get("retrieved") for row in email_named_rows) and poc_status == "evidence-verified")
+        if email and not any(
             isinstance(e, dict) and str(e.get("email") or "").lower() == email for e in emails
         ):
+            email_sources = list(dict.fromkeys(str(row.get("url") or "") for row in (email_named_rows if email_is_named else email_rows) if row.get("url")))
+            accepted_source_urls.extend(email_sources)
+            email_status = "evidence-verified" if any(row.get("retrieved") for row in email_rows) else "search-snippet-supported"
             emails.append({
                 "email": email,
-                "person": ai_poc.get("name") or "",
-                "person_name": ai_poc.get("name") or "",
-                "title": ai_poc.get("title") or "",
-                "label": ai_poc.get("title") or "AI-judged public contact",
-                "source": ai_poc.get("source") or "AI profile judge",
-                "source_urls": ai_poc.get("source_urls") or [],
+                "person": poc_name if email_is_named else "",
+                "person_name": poc_name if email_is_named else "",
+                "title": ai_poc.get("title") or "" if email_is_named else "",
+                "label": (ai_poc.get("title") or "Public company email") if email_is_named else "Public company email",
+                "source": "Public evidence + AI judge" if email_status == "evidence-verified" else "Search snippet only; page not fetched",
+                "source_urls": email_sources,
                 "confidence": ai_poc.get("confidence") or "Medium",
-                "verified": bool(ai_poc.get("verified")),
-                "provenance": ai_poc.get("provenance") or "ai-knowledge",
+                "verified": email_status == "evidence-verified",
+                "verification_status": email_status,
+                "provenance": "public-evidence" if email_status == "evidence-verified" else "search-snippet",
             })
         ci["emails"] = emails[:20]
         phones = list(ci.get("phones") or [])
-        phone = str(ai_poc.get("phone") or "").strip()
+        phone = candidate_phone if phone_rows and _is_valid_phone(candidate_phone) else ""
+        phone_is_named = bool(phone and any(row.get("retrieved") for row in phone_named_rows) and poc_status == "evidence-verified")
         if phone and _is_valid_phone(phone) and not any(
             isinstance(p, dict) and re.sub(r"\D", "", str(p.get("number") or "")) == re.sub(r"\D", "", phone)
             for p in phones
         ):
+            phone_sources = list(dict.fromkeys(str(row.get("url") or "") for row in (phone_named_rows if phone_is_named else phone_rows) if row.get("url")))
+            accepted_source_urls.extend(phone_sources)
+            phone_status = "evidence-verified" if any(row.get("retrieved") for row in phone_rows) else "search-snippet-supported"
             phones.append({
                 "number": phone,
-                "person": ai_poc.get("name") or "",
-                "person_name": ai_poc.get("name") or "",
-                "label": ai_poc.get("title") or "AI-judged public contact",
-                "source": ai_poc.get("source") or "AI profile judge",
-                "source_urls": ai_poc.get("source_urls") or [],
+                "person": poc_name if phone_is_named else "",
+                "person_name": poc_name if phone_is_named else "",
+                "label": (ai_poc.get("title") or "Public company phone") if phone_is_named else "Public company phone",
+                "source": "Public evidence + AI judge" if phone_status == "evidence-verified" else "Search snippet only; page not fetched",
+                "source_urls": phone_sources,
                 "confidence": ai_poc.get("confidence") or "Medium",
-                "verified": bool(ai_poc.get("verified")),
-                "provenance": ai_poc.get("provenance") or "ai-knowledge",
+                "verified": phone_status == "evidence-verified",
+                "verification_status": phone_status,
+                "provenance": "public-evidence" if phone_status == "evidence-verified" else "search-snippet",
             })
         ci["phones"] = phones[:20]
         report["contact_intelligence"] = ci
@@ -3873,14 +4003,111 @@ Rules:
         status = fact.get("verification_status") or "model-knowledge-reviewed"
         cp[key] = _field(
             fact["value"],
-            "Public evidence + AI judge" if status == "evidence-verified" else "AI public knowledge + AI judge",
+            _ai_status_source(status),
             fact.get("confidence") or "Medium",
         )
+        cp[key]["verification_status"] = status
+        cp[key]["source_urls"] = fact.get("source_urls") or []
         accepted_source_urls.extend(fact.get("source_urls") or [])
     report["company_profile"] = cp
 
+    # Fill only stable business-profile gaps. AI-knowledge-only values remain
+    # explicitly labeled suggestions; recent news, hiring, financial amounts,
+    # emails, and phone numbers still require current public evidence.
+    business = verdict.get("business_profile") if isinstance(verdict.get("business_profile"), dict) else {}
+    business_fields_added = 0
+    ps = report.get("products_services") if isinstance(report.get("products_services"), dict) else {}
+    current_offerings = [
+        row for row in (ps.get("primary_offerings") or [])
+        if isinstance(row, dict) and str(row.get("item") or row.get("value") or "").strip()
+        and "not publicly" not in str(row.get("item") or row.get("value") or "").lower()
+    ]
+    weak_offering_coverage = (
+        len(current_offerings) < 2
+        or (current_offerings and all(str(row.get("confidence") or "").lower() == "low" for row in current_offerings))
+    )
+    if weak_offering_coverage:
+        filled_offerings = list(current_offerings)
+        existing_offering_keys = {
+            str(row.get("item") or row.get("value") or "").strip().lower()
+            for row in current_offerings
+        }
+        for row in business.get("products_services") or []:
+            item = str(row.get("item") or "").strip() if isinstance(row, dict) else ""
+            if not item or item.lower() in existing_offering_keys:
+                continue
+            status = row.get("verification_status") or "model-knowledge-reviewed"
+            source_label = _ai_status_source(status)
+            filled_offerings.append({
+                "item": item,
+                "source": source_label,
+                "confidence": row.get("confidence") or "Medium",
+                "verification_status": status,
+                "source_urls": row.get("source_urls") or [],
+            })
+            accepted_source_urls.extend(row.get("source_urls") or [])
+            existing_offering_keys.add(item.lower())
+        if len(filled_offerings) > len(current_offerings):
+            ps["primary_offerings"] = filled_offerings[:8]
+            business_fields_added += 1
+            report["products_services"] = ps
+
+    ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+    for key in ("market_position", "geographic_reach"):
+        current_text = _field_text(ma.get(key))
+        missing = not current_text or any(marker in current_text.lower() for marker in (
+            "not publicly available", "not available", "unknown", "n/a",
+        ))
+        if key == "geographic_reach" and current_text.lower().startswith("headquartered in "):
+            # HQ is location information, but does not establish operating reach.
+            missing = True
+        fact = business.get(key) if isinstance(business.get(key), dict) else {}
+        if not missing or not fact.get("value"):
+            continue
+        status = fact.get("verification_status") or "model-knowledge-reviewed"
+        ma[key] = _field(
+            fact.get("value"),
+            _ai_status_source(status),
+            fact.get("confidence") or "Medium",
+        )
+        ma[key]["verification_status"] = status
+        ma[key]["source_urls"] = fact.get("source_urls") or []
+        ma[key]["reason"] = fact.get("reason") or "Reviewed by the AI profile judge"
+        accepted_source_urls.extend(fact.get("source_urls") or [])
+        business_fields_added += 1
+    report["market_analysis"] = ma
+
+    competitor_candidates = []
+    for row in business.get("competitor_candidates") or []:
+        if not isinstance(row, dict) or not row.get("name"):
+            continue
+        urls = [u for u in (row.get("source_urls") or []) if isinstance(u, str)]
+        accepted_source_urls.extend(urls)
+        candidate = {
+            "name": str(row.get("name") or "").strip(),
+            "official_domain": str(row.get("official_domain") or "").strip(),
+            "market_location": str(row.get("market_location") or "").strip(),
+            "overlap_reason": str(row.get("overlap_reason") or "").strip(),
+            "confidence": row.get("confidence") or "Medium",
+            "verification_status": row.get("verification_status") or "model-knowledge-reviewed",
+            "source_urls": urls,
+            "reason": row.get("reason") or "Reviewed by the AI profile judge",
+        }
+        if not candidate["name"]:
+            continue
+        # This fallback can suggest likely peers, but a competitor must not be
+        # promoted into the verified list merely because its name appeared in a
+        # search snippet. The primary report judge owns evidence-backed comps.
+        candidate["verification_status"] = "model-knowledge-reviewed"
+        candidate["confidence"] = "Medium"
+        competitor_candidates.append(candidate)
+    report["competitor_candidates"] = competitor_candidates[:4]
+    competitor_candidates_added = len(competitor_candidates[:4])
+    if competitor_candidates_added:
+        business_fields_added += 1
+
     unique_urls = list(dict.fromkeys(accepted_source_urls))[:20]
-    accepted_count = added + (1 if ai_poc else 0)
+    accepted_count = added + (1 if ai_poc else 0) + business_fields_added
     base_result.update({
         "status": "complete" if accepted_count else "complete_no_new_facts",
         "judge_score": int(verdict.get("overall_score") or 0),
@@ -3888,6 +4115,8 @@ Rules:
         "source_urls": unique_urls,
         "leaders_added": added,
         "point_of_contact": ai_poc,
+        "business_fields_added": business_fields_added,
+        "competitor_candidates_added": competitor_candidates_added,
         "evidence_count": len(evidence),
     })
     report["ai_enrichment"] = base_result
@@ -4481,6 +4710,7 @@ def _mcp_scrape_sources(discovered: list, company_domain: str, max_pages: int = 
                 "text": item.get("snippet") or "",
                 "emails": [],
                 "phones": [],
+                "retrieved": False,
             })
         print(f"[MCP Scrape] Using {len(pages)} search snippets (no extra page downloads)")
         return pages
@@ -4532,6 +4762,7 @@ def _mcp_scrape_sources(discovered: list, company_domain: str, max_pages: int = 
                 "text": text[:2500],
                 "emails": contacts["emails"],
                 "phones": contacts["phones"],
+                "retrieved": True,
                 "favicon": f"https://www.google.com/s2/favicons?domain={item.get('domain','')}&sz=64",
             }
         except Exception as e:
@@ -4675,6 +4906,42 @@ def _build_prompt(url, company_name, scraped, intel):
             f"employees={wd.get('employees') or 'n/a'}; revenue={wd.get('revenue') or 'n/a'}\n"
         )
 
+    # The deep-search stage already retrieves these public pages, so pass a
+    # compact, URL-preserving subset into synthesis instead of asking the model
+    # to fill profile fields from the company homepage alone.
+    public_evidence = []
+    seen_evidence_urls = set()
+    for page in (intel.get("_scraped_pages") or [])[:6]:
+        if not isinstance(page, dict):
+            continue
+        source_url = str(page.get("url") or "").strip()
+        text = re.sub(r"\s+", " ", str(page.get("text") or page.get("snippet") or "")).strip()
+        if not source_url.startswith(("http://", "https://")) or not text:
+            continue
+        public_evidence.append({
+            "category": str(page.get("category") or "Public Web")[:50],
+            "title": str(page.get("title") or page.get("domain") or "Public source")[:100],
+            "url": source_url,
+            "excerpt": text[:420],
+        })
+        seen_evidence_urls.add(source_url)
+    for row in (intel.get("_source_urls") or []):
+        if len(public_evidence) >= 9:
+            break
+        if not isinstance(row, dict):
+            continue
+        source_url = str(row.get("url") or "").strip()
+        if not source_url.startswith(("http://", "https://")) or source_url in seen_evidence_urls:
+            continue
+        public_evidence.append({
+            "category": str(row.get("category") or "Public Web")[:50],
+            "title": str(row.get("title") or "Search result")[:100],
+            "url": source_url,
+            "excerpt": "Search result reference; page text was not retrieved.",
+        })
+        seen_evidence_urls.add(source_url)
+    public_evidence_text = json.dumps(public_evidence, ensure_ascii=False)[:3000]
+
     return f"""Company: {company_name}
 URL: {url}
 Title: {clip(scraped.get('title'), 120)}
@@ -4685,6 +4952,8 @@ Products: {clip(scraped.get('products_text'), 320)}
 Leadership page: {clip(scraped.get('leadership_text') or (scraped.get('_structured') or {}).get('leadership_text') or (scraped.get('_structured') or {}).get('about_text'), 800)}
 Wikipedia: {clip(scraped.get('wikipedia_summary') or scraped.get('wikipedia_text'), 800)}
 {wd_line}
+ADDITIONAL PUBLIC WEB EVIDENCE (each URL is a candidate source; do not treat an un-fetched search result as page verification):
+{public_evidence_text}
 CONTACTS already scraped (copy into contact_intelligence, do not invent):
 emails={clip(json.dumps(contact.get('emails',[])), 400)}
 phones={clip(json.dumps(contact.get('phones',[])), 400)}
@@ -4694,13 +4963,14 @@ Return ONLY compact JSON. IMPORTANT schema rules:
 - company_profile: object with name, website, description; founded/etc as {{value,source,confidence}}
 - products_services: {{"primary_offerings":[{{"item","source","confidence"}}], "pricing_model":{{...}}, "target_customers":{{...}}}}
 - market_analysis: {{"industry":{{...}},"market_position":{{...}},"geographic_reach":{{...}}}}
-- swot_analysis: ALL 4 keys strengths/weaknesses/opportunities/threats as arrays of
-  {{"point","source","confidence"}} — at least 3 points each. Never use "Not publicly available" as a point.
-- competitors: array of at least 3 objects {{"name","description","strengths","weaknesses","threat_level","source","confidence"}}
+- swot_analysis: strengths/weaknesses/opportunities/threats as arrays of
+  {{"point","source","confidence"}}. Include only supported observations or clearly labeled analysis; fewer than 3 is better than padding with generic claims.
+- competitors: up to 4 evidence-supported objects {{"name","description","official_domain","market_location","overlap_reason","evidence_url","threat_level","source","confidence"}}. Return fewer when the evidence does not establish a direct competitor in the same business domain and market.
 - leadership_team: array of {{"name","role","source","confidence","background"}} for people supported by Wikipedia/website/leadership sources or clearly domain-matched public evidence. If evidence is missing, return an empty array; never fill a role from memory.
-- risk_assessment: overall_risk_level string + regulatory/competitive/operational/reputational_risks as arrays of {{"risk","source","confidence"}}
-- financial_data: revenue/funding only if found in scrapes; else Not publicly available
-- recent_news: array of objects; intelligence_score: {{"overall","data_completeness","source_reliability","summary"}}
+- risk_assessment: overall_risk_level plus regulatory/competitive/operational/reputational_risks as arrays of {{"risk","source","confidence","evidence_url","basis"}}. Do not infer a company-specific risk from generic industry assumptions.
+- financial_data: revenue/funding only if found in retrieved source text or domain-matched Wikidata; else Not publicly available. Never infer a funding stage or profitability.
+- recent_news: up to 4 objects with title, publication date, source_url, summary, and confidence. Only include dated, company-specific items supported by the supplied sources; do not invent news.
+- intelligence_score: {{"overall","data_completeness","source_reliability","summary"}}
 Do NOT wrap whole sections in a single {{value,source,confidence}} object.
 Never invent people or exact revenue/funding numbers. No CIN / MCA fields."""
 
@@ -5012,7 +5282,7 @@ def _industry_context(scraped: dict, intel: dict) -> dict:
 
 
 def _heuristic_swot(scraped: dict, intel: dict, company_name: str = "") -> dict:
-    """Always return a full 4-quadrant SWOT from public signals — never 'N/A' placeholders."""
+    """Build only observable SWOT signals; avoid generic company-risk claims."""
     about = (scraped.get("about_text") or scraped.get("homepage_text") or "")
     products = (scraped.get("products_text") or "")
     desc = (scraped.get("description") or "")
@@ -5040,74 +5310,22 @@ def _heuristic_swot(scraped: dict, intel: dict, company_name: str = "") -> dict:
     if (scraped.get("contact_data") or {}).get("emails") or (scraped.get("contact_data") or {}).get("phones"):
         strengths.append({"point": "Public contact channels (email/phone) listed for enquiries",
                           "source": "Homepage / Footer", "confidence": "High"})
-    if not strengths:
-        strengths.append({"point": f"{name} maintains an active public website and brand presence",
-                          "source": "Company Website", "confidence": "Medium"})
+    weaknesses = []
+    if not scraped.get("pricing_text"):
+        weaknesses.append({
+            "point": "No pricing information was found on the pages crawled; this is a public-information gap, not proof of a business weakness.",
+            "source": "Website scan", "confidence": "Medium", "basis": "evidence-limit",
+        })
+    if len(reviews) < 80:
+        weaknesses.append({
+            "point": "The sources checked did not provide enough employee-review text for a reliable culture assessment.",
+            "source": "Public-source coverage", "confidence": "Low", "basis": "evidence-limit",
+        })
 
-    weaknesses = [
-        {"point": "No public pricing page — buyers cannot self-serve compare costs",
-         "source": "Website scan", "confidence": "High"} if not scraped.get("pricing_text") else None,
-        {"point": "Thin public employee-review footprint (Glassdoor/AmbitionBox limited)",
-         "source": "Public web scrape", "confidence": "Medium"} if len(reviews) < 80 else None,
-        {"point": "Public financials (revenue/profit) largely undisclosed vs listed peers",
-         "source": "Public web scrape", "confidence": "Medium"},
-        {"point": "Limited third-party news coverage reduces brand discovery outside owned channels",
-         "source": "News scrape", "confidence": "Low"} if len(intel.get("news_recent") or "") < 60 else None,
-    ]
-    weaknesses = [w for w in weaknesses if w]
-    if len(weaknesses) < 2:
-        weaknesses.append({"point": "Brand awareness may lag larger, better-funded competitors in the same category",
-                           "source": "Competitive analysis", "confidence": "Medium"})
-
+    # An opportunity or threat needs company- and market-specific evidence.
+    # The baseline path cannot establish those from an industry label alone.
     opportunities = []
-    if any(x in home_l for x in ("worldwide", "global", "international", "export")):
-        opportunities.append({"point": f"International expansion using {name}'s existing brand footprint",
-                              "source": "Company positioning", "confidence": "Medium"})
-    elif any(x in home_l for x in ("india", "mumbai", "delhi", "bengaluru", "kolkata")):
-        opportunities.append({"point": f"Expand coverage in core home markets where {name} already operates",
-                              "source": "Company positioning", "confidence": "Medium"})
-    opp_by_industry = {
-        "engineering": "Package digital engineering / BIM / sustainability as premium offerings",
-        "software": "Productize services into recurring SaaS / managed offerings",
-        "manufacturing": "Export markets and supplier diversification create expansion upside",
-        "healthcare": "Telehealth / diagnostics partnerships can widen patient reach",
-        "ecommerce": "Content + community commerce can lift organic acquisition",
-        "education": "Corporate upskilling and hybrid learning programs are underserved",
-        "logistics": "E-commerce fulfillment demand supports network density plays",
-        "professional_services": "Thought-leadership content can drive inbound B2B leads",
-        "general": "Publish case studies and SEO content to capture high-intent buyers",
-    }
-    opportunities.append({"point": opp_by_industry.get(label, opp_by_industry["general"]),
-                          "source": "Industry analysis", "confidence": "Medium"})
-    if market:
-        opportunities.append({"point": f"Public market chatter to leverage: {market[:140].rstrip()}…",
-                              "source": "Public web scrape", "confidence": "Medium"})
-    opportunities.append({"point": "Partnerships / channel alliances to reach customers beyond current footprint",
-                          "source": "Strategic analysis", "confidence": "Medium"})
-    opportunities.append({"point": "Hire publicly for scarce skills to signal growth and attract talent",
-                          "source": "Talent market", "confidence": "Low"})
-
-    threat_by_industry = {
-        "engineering": "Competition from larger national/global engineering consultancies",
-        "software": "Price pressure from global IT majors and low-cost offshore rivals",
-        "manufacturing": "Input-cost volatility and import competition",
-        "healthcare": "Regulatory compliance and reputation risk around patient outcomes",
-        "ecommerce": "Heavy discounting and ad-cost inflation from marketplace giants",
-        "education": "High CAC and trust scrutiny in consumer education brands",
-        "logistics": "Fuel costs and last-mile competition compress margins",
-        "professional_services": "Client consolidation and in-housing of advisory work",
-        "general": "Larger competitors with stronger brand and distribution",
-    }
-    threats = [
-        {"point": threat_by_industry.get(label, threat_by_industry["general"]),
-         "source": "Industry analysis", "confidence": "High"},
-        {"point": "Talent competition for specialized roles increases wage and retention pressure",
-         "source": "Workforce analysis", "confidence": "Medium"},
-        {"point": "Negative reviews or project issues can spread quickly on public platforms",
-         "source": "Reputational risk", "confidence": "Medium"},
-        {"point": "Macro slowdown reducing discretionary / capex spend among target customers",
-         "source": "Macro risk", "confidence": "Medium"},
-    ]
+    threats = []
     return {
         "strengths": strengths[:6],
         "weaknesses": weaknesses[:5],
@@ -5194,14 +5412,8 @@ def _extract_competitors(company_name: str, intel: dict, scraped: dict = None) -
                 ):
                     _add(m.group(1), "Named in competitor list", urlparse(href).netloc or "Web search", "Medium", "Medium")
 
-    # 3) Same-industry peer catalog only when industry is confidently detected
-    ctx = _industry_context(scraped, intel)
-    if ctx.get("label") and ctx["label"] != "general" and len(comps) < 3:
-        for name, desc, threat in ctx.get("peers") or []:
-            _add(name, desc, f"Same-industry peer set ({ctx['label']})", threat, "Medium")
-            if len(comps) >= 5:
-                break
-
+    # Do not fill a competitor quota with generic industry peers. A company
+    # can have fewer than three publicly evidenced direct competitors.
     return comps[:6]
 
 
@@ -5371,10 +5583,17 @@ def _score_to_int(v, default: int = 50) -> int:
         return default
 
 
-def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -> dict:
+def _apply_llm_judge(
+    report: dict,
+    scraped: dict,
+    company_name: str,
+    url: str,
+    intel: dict | None = None,
+) -> dict:
     """Final confidence gate — LLM judge sanitizes the report before UI sees it."""
     from backend.services import llm_judge
 
+    intel = intel or {}
     domain = urlparse(url).netloc.replace("www.", "")
     offerings = []
     for o in ((report.get("products_services") or {}).get("primary_offerings") or [])[:6]:
@@ -5397,6 +5616,56 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
         ) if part
     )[:2600]
 
+    public_evidence = []
+    allowed_evidence_urls = set()
+    evidence_text_by_url = {}
+    if str(url).startswith(("http://", "https://")):
+        allowed_evidence_urls.add(str(url).strip())
+        evidence_text_by_url[str(url).strip()] = site_evidence
+        public_evidence.append({
+            "url": str(url).strip(),
+            "title": company_name or domain,
+            "category": "Company Website",
+            "text": site_evidence[:850],
+        })
+        canonical_site_url = _canonical_public_url(str(url))
+        if canonical_site_url:
+            allowed_evidence_urls.add(canonical_site_url)
+            evidence_text_by_url[canonical_site_url] = site_evidence
+    for page in (intel.get("_scraped_pages") or [])[:10]:
+        if not isinstance(page, dict):
+            continue
+        page_url = str(page.get("url") or "").strip()
+        if not page_url.startswith(("http://", "https://")):
+            continue
+        allowed_evidence_urls.add(page_url)
+        page_text = str(page.get("text") or page.get("snippet") or "")[:850]
+        evidence_text_by_url[page_url] = page_text
+        canonical_page_url = _canonical_public_url(page_url)
+        if canonical_page_url:
+            allowed_evidence_urls.add(canonical_page_url)
+            evidence_text_by_url[canonical_page_url] = page_text
+        public_evidence.append({
+            "url": page_url,
+            "title": page.get("title") or page.get("domain") or "Public source",
+            "category": page.get("category") or "Public Web",
+            "text": page_text,
+        })
+    for row in (intel.get("_source_urls") or []):
+        if len(public_evidence) >= 12:
+            break
+        if not isinstance(row, dict):
+            continue
+        source_url = str(row.get("url") or "").strip()
+        if not source_url.startswith(("http://", "https://")) or source_url in allowed_evidence_urls:
+            continue
+        public_evidence.append({
+            "url": source_url,
+            "title": row.get("title") or "Search result",
+            "category": row.get("category") or "Public Web",
+            "text": f"Search-result snippet only; destination page not retrieved. {str(row.get('snippet') or '')[:500]}",
+        })
+
     verdict = llm_judge.judge_research_report(
         website_url=url,
         domain=domain,
@@ -5405,6 +5674,7 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
         offerings_hint=offerings_hint,
         report=report,
         wikidata_hint=wd,
+        public_evidence=public_evidence,
     )
     judge_available = not bool(verdict.get("_error"))
     print(
@@ -5444,7 +5714,8 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
             ma["market_position"] = _field("Not publicly available", "Judge", "Low")
             report["market_analysis"] = ma
 
-    # Competitors: judge list only (domain-specific). Drop Low-confidence generics.
+    # Competitors: require a supporting URL from retrieved/discovered public
+    # evidence. Do not pad the result with generic industry peers.
     judged_comps = []
     brand_l = company_name.lower()
     for c in verdict.get("competitors") or []:
@@ -5456,13 +5727,30 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
         if name.lower() == brand_l or brand_l in name.lower() or name.lower() in brand_l:
             continue
         conf = str(c.get("confidence") or "Medium")
-        if conf.lower() == "low":
+        evidence_url = str(c.get("evidence_url") or "").strip()
+        if conf.lower() == "low" or evidence_url not in allowed_evidence_urls:
             continue
+        official_domain = str(c.get("official_domain") or "").strip().lower().rstrip("/")
+        official_domain = official_domain.removeprefix("https://").removeprefix("http://").removeprefix("www.")
+        known_hosts = {
+            urlparse(source_url).netloc.lower().removeprefix("www.")
+            for source_url in allowed_evidence_urls
+            if urlparse(source_url).netloc
+        }
+        if official_domain and not any(
+            official_domain == host or host.endswith("." + official_domain) or official_domain.endswith("." + host)
+            for host in known_hosts
+        ):
+            official_domain = ""
         judged_comps.append({
             "name": name,
             "description": c.get("description") or "",
             "strengths": c.get("strengths") or "",
             "weaknesses": c.get("weaknesses") or "",
+            "official_domain": official_domain,
+            "market_location": c.get("market_location") or "",
+            "overlap_reason": c.get("overlap_reason") or "",
+            "evidence_url": evidence_url,
             "threat_level": c.get("threat_level") or "Medium",
             "source": c.get("source") or "Judge-validated",
             "confidence": conf if conf in ("High", "Medium") else "Medium",
@@ -5470,6 +5758,71 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
     # Never fall back to the raw model/search competitor list. An empty judged
     # list is intentional: no same-business competitor cleared the scope gate.
     report["competitors"] = judged_comps[:6] if judge_available else []
+
+    # SWOT and risk output is fact-gated: every retained point must refer to an
+    # exact company-site or retrieved public-evidence URL. Analysis stays
+    # labeled as analysis and is never promoted into a sourced company fact.
+    def _validated_analysis_items(section: str, key: str, text_key: str) -> list[dict]:
+        source = verdict.get(section) if isinstance(verdict.get(section), dict) else {}
+        output = []
+        seen = set()
+        for row in (source.get(key) or [])[:8]:
+            if not isinstance(row, dict):
+                continue
+            point = re.sub(r"\s+", " ", str(row.get(text_key) or "")).strip()
+            source_url = str(row.get("source_url") or "").strip()
+            if not point or len(point) > 280 or source_url not in allowed_evidence_urls:
+                continue
+            norm = point.lower()
+            if norm in seen:
+                continue
+            seen.add(norm)
+            basis = str(row.get("basis") or "fact").strip().lower()
+            if basis not in {"fact", "analysis"}:
+                basis = "analysis"
+            confidence = str(row.get("confidence") or "Medium").strip().title()
+            if confidence not in {"High", "Medium", "Low"}:
+                confidence = "Medium"
+            host = urlparse(source_url).netloc.replace("www.", "")
+            output.append({
+                text_key: point,
+                "source": host or "Public source",
+                "source_url": source_url,
+                "confidence": confidence,
+                "basis": basis,
+                "verification_status": "evidence-verified",
+            })
+            if len(output) >= 4:
+                break
+        return output
+
+    if judge_available:
+        report["swot_analysis"] = {
+            quadrant: _validated_analysis_items("swot_analysis", quadrant, "point")
+            for quadrant in ("strengths", "weaknesses", "opportunities", "threats")
+        }
+        judged_risk = {
+            category: _validated_analysis_items("risk_assessment", category, "risk")
+            for category in (
+                "regulatory_risks", "competitive_risks", "operational_risks", "reputational_risks",
+            )
+        }
+        requested_level = str(
+            (verdict.get("risk_assessment") or {}).get("overall_risk_level") or "Undetermined"
+        ).strip().title()
+        has_supported_risk = any(judged_risk.values())
+        judged_risk["overall_risk_level"] = (
+            requested_level if has_supported_risk and requested_level in {"Low", "Medium", "High"}
+            else "Undetermined"
+        )
+        report["risk_assessment"] = judged_risk
+    else:
+        report["swot_analysis"] = {"strengths": [], "weaknesses": [], "opportunities": [], "threats": []}
+        report["risk_assessment"] = {
+            "overall_risk_level": "Undetermined",
+            "regulatory_risks": [], "competitive_risks": [],
+            "operational_risks": [], "reputational_risks": [],
+        }
 
     # Geographic reach — must be a display string
     ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
@@ -5484,26 +5837,71 @@ def _apply_llm_judge(report: dict, scraped: dict, company_name: str, url: str) -
         ma["geographic_reach"] = auth.normalize_geographic_reach(ma.get("geographic_reach"), hq, desc)
     report["market_analysis"] = ma
 
-    # Revenue — reject stock prices / unit-less amounts
+    # Revenue and funding — require a domain-matched structured fact or a value
+    # that occurs in the supplied source text. A judge assertion alone is not
+    # financial evidence.
     fin = report.get("financial_data") if isinstance(report.get("financial_data"), dict) else {}
     rev_v = verdict.get("revenue_estimate")
-    judged_rev = auth.sanitize_revenue(rev_v.get("value") if isinstance(rev_v, dict) else rev_v)
     wd_rev = auth.sanitize_revenue((scraped.get("_wikidata") or {}).get("revenue"))
-    existing_rev = auth.sanitize_revenue(fin.get("revenue_estimate"))
-    best_rev = wd_rev or judged_rev or existing_rev
+
+    def _validated_financial_value(row, scaled_amount: bool = False):
+        if not isinstance(row, dict):
+            return "", "", ""
+        value = re.sub(r"\s+", " ", str(row.get("value") or "")).strip()
+        source_url = str(row.get("source_url") or "").strip()
+        if not value or value.lower() in {"not publicly available", "unknown", "n/a", "undisclosed"}:
+            return "", "", ""
+        if source_url not in allowed_evidence_urls:
+            return "", "", ""
+        source_text = evidence_text_by_url.get(source_url, "").lower()
+        if value.lower() not in source_text:
+            canonical = _canonical_public_url(source_url)
+            source_text = evidence_text_by_url.get(canonical, "").lower()
+        if value.lower() not in source_text:
+            return "", "", ""
+        if scaled_amount:
+            value = auth.sanitize_revenue(value)
+            if not value:
+                return "", "", ""
+        return value, source_url, str(row.get("confidence") or "Medium")
+
+    judged_rev, judged_rev_url, judged_rev_conf = _validated_financial_value(rev_v, scaled_amount=True)
+    best_rev = wd_rev or judged_rev or ""
     if best_rev:
         src = "Wikidata" if wd_rev else (
-            (rev_v.get("source") if isinstance(rev_v, dict) else "") or "Public filings"
+            urlparse(judged_rev_url).netloc.replace("www.", "") or "Public source"
         )
-        conf = "High" if wd_rev else (rev_v.get("confidence") if isinstance(rev_v, dict) else "Medium")
+        conf = "High" if wd_rev else judged_rev_conf
         fin["revenue_estimate"] = _field(best_rev, src, conf or "Medium")
+        revenue_source_url = (scraped.get("_wikidata") or {}).get("source_url") if wd_rev else judged_rev_url
+        fin["revenue_estimate"].update({
+            "verification_status": "evidence-verified",
+            "source_urls": [revenue_source_url] if revenue_source_url else [],
+        })
     else:
         fin["revenue_estimate"] = _field("Not publicly available", "Public filings", "Low")
+
+    financial_intelligence = verdict.get("financial_intelligence") if isinstance(verdict.get("financial_intelligence"), dict) else {}
+    for key in ("funding_status", "total_funding", "funding_stage", "profitability_status"):
+        value, source_url, confidence = _validated_financial_value(
+            financial_intelligence.get(key),
+            scaled_amount=(key == "total_funding"),
+        )
+        if value:
+            fin[key] = _field(value, urlparse(source_url).netloc.replace("www.", "") or "Public source", confidence)
+            fin[key].update({"verification_status": "evidence-verified", "source_urls": [source_url]})
+        else:
+            fin[key] = _field("Not publicly available", "Public sources", "Low")
     report["financial_data"] = fin
     cp = report.get("company_profile") if isinstance(report.get("company_profile"), dict) else {}
     if best_rev:
         cp["annual_revenue"] = _field(best_rev, fin["revenue_estimate"].get("source") or "Public filings",
                                       fin["revenue_estimate"].get("confidence") or "Medium")
+        cp["annual_revenue"].update({
+            key: fin["revenue_estimate"][key]
+            for key in ("verification_status", "source_urls")
+            if key in fin["revenue_estimate"]
+        })
     else:
         cp["annual_revenue"] = _field("Not publicly available", "Public filings", "Low")
 
@@ -5614,6 +6012,7 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
     Fix Groq schema drift so the Streamlit tabs always get usable structures.
     Citations already work; this repairs Overview / SWOT / etc.
     """
+    domain = urlparse(url).netloc.replace("www.", "")
     if not isinstance(report, dict):
         report = {}
 
@@ -5805,13 +6204,7 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
     else:
         for key in ("strengths", "weaknesses", "opportunities", "threats"):
             swot[key] = _clean_swot_points(swot.get(key) or [])
-        # If LLM left W/O/T empty or N/A-only, fill from heuristic
-        filled = _heuristic_swot(scraped, intel, company_name)
-        for key in ("strengths", "weaknesses", "opportunities", "threats"):
-            existing = swot.get(key) or []
-            if len(existing) < 3:
-                pad = [p for p in filled[key] if p["point"] not in {e["point"] for e in existing}]
-                swot[key] = (existing + pad)[:5]
+        # Do not pad an evidence-thin quadrant with generic industry advice.
         report["swot_analysis"] = swot
 
     # ── competitors / news lists ─────────────────────────────────────
@@ -5857,23 +6250,23 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
         news_items = []
         seen_titles = set()
 
-        def _push_news(title, source, url="", summary="", conf="Medium"):
+        def _push_news(title, source, url="", summary="", conf="Medium", date=""):
             title = _clean_snippet(title or "", 120) or (title or "")[:120]
             if not title or len(title) < 12:
                 return
             key = title.lower()[:80]
             if key in seen_titles or _is_illogical_text(title):
                 return
-            # Drop stock-ticker chrome / unrelated fund blurbs without company name
-            low = title.lower()
-            brand = (company_name or "").lower().split()[0]
-            if brand and brand not in low and brand not in (summary or "").lower():
-                if any(x in low for x in ("nifty", "sensex", "midcap fund", "motilal")):
-                    return
+            if not url or auth.is_junk_citation(url):
+                return
+            # Search results often mix similarly named publishers and companies.
+            # Keep only items whose title/snippet identifies this company.
+            if not _blob_matches_brand(f"{title} {summary or ''}", company_name, domain):
+                return
             seen_titles.add(key)
             news_items.append({
                 "title": title,
-                "date": "",
+                "date": str(date or "").strip(),
                 "source": source,
                 "source_url": url,
                 "summary": _clean_snippet(summary, 220) or summary[:220],
@@ -5891,13 +6284,17 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
                     page.get("url") or "",
                     (page.get("text") or "")[:220],
                     "Medium",
+                    page.get("published_at") or page.get("date") or "",
                 )
         # Dedicated news search only in deep mode
         if RESEARCH_DEEP and len(news_items) < 2:
             for r in _ddg_search(f'"{company_name}" news', max_results=6):
                 href = r.get("href") or ""
                 host = urlparse(href).netloc.replace("www.", "")
-                _push_news(r.get("title") or "", host, href, r.get("body") or "", "Medium")
+                _push_news(
+                    r.get("title") or "", host, href, r.get("body") or "", "Medium",
+                    r.get("date") or r.get("published") or r.get("published_at") or "",
+                )
                 intel.setdefault("_source_urls", []).append({
                     "title": (r.get("title") or "")[:80], "url": href, "category": "News",
                 })
@@ -5912,7 +6309,7 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
                         "Low",
                     )
         report["recent_news"] = (report.get("recent_news") or []) + news_items
-        report["recent_news"] = report["recent_news"][:6]
+        report["recent_news"] = report["recent_news"][:4]
 
     # ── content_strategy ─────────────────────────────────────────────
     cs = report.get("content_strategy")
@@ -5987,35 +6384,14 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
 
     # ── risk / financial ─────────────────────────────────────────────
     def _default_risks(label: str) -> dict:
-        reg = {
-            "engineering": "Construction/safety compliance and municipal approval delays",
-            "software": "Data protection / IT Act compliance and client security audits",
-            "healthcare": "Clinical / patient-data regulatory compliance requirements",
-            "manufacturing": "Factory safety, pollution, and labour compliance obligations",
-            "ecommerce": "Consumer protection and marketplace listing compliance",
-            "education": "Advertising / disclosure rules for education brands",
-            "logistics": "Transport permits and labour compliance across states",
-            "professional_services": "Professional licensing and client confidentiality rules",
-            "general": "Sector-specific licensing and compliance obligations",
-        }
+        # Industry-wide possibilities are not evidence that this company has
+        # an actual exposure. Leave the assessment undetermined until sourced.
         return {
-            "overall_risk_level": "Medium",
-            "competitive_risks": [
-                {"risk": "Peer firms and larger brands competing for the same customers",
-                 "source": "Industry analysis", "confidence": "High"},
-            ],
-            "regulatory_risks": [
-                {"risk": reg.get(label, reg["general"]),
-                 "source": "Industry analysis", "confidence": "Medium"},
-            ],
-            "operational_risks": [
-                {"risk": "Key-person dependency and specialized talent retention",
-                 "source": "Workforce analysis", "confidence": "Medium"},
-            ],
-            "reputational_risks": [
-                {"risk": "Service/quality issues can spread quickly via public reviews/news",
-                 "source": "Reputational analysis", "confidence": "Medium"},
-            ],
+            "overall_risk_level": "Undetermined",
+            "competitive_risks": [],
+            "regulatory_risks": [],
+            "operational_risks": [],
+            "reputational_risks": [],
         }
 
     industry_label = _industry_context(scraped, intel)["label"]
@@ -6025,9 +6401,9 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
         risk = report.get("risk_assessment") or {}
         rl = risk.get("overall_risk_level")
         if isinstance(rl, dict):
-            risk["overall_risk_level"] = rl.get("value") or "Medium"
+            risk["overall_risk_level"] = rl.get("value") or "Undetermined"
         elif not rl:
-            risk["overall_risk_level"] = "Medium"
+            risk["overall_risk_level"] = "Undetermined"
         defaults = _default_risks(industry_label)
         for cat in ("regulatory_risks", "competitive_risks", "operational_risks", "reputational_risks"):
             items = risk.get(cat) or []
@@ -6045,6 +6421,8 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
                             "risk": rsk,
                             "source": it.get("source") or "Analysis",
                             "confidence": it.get("confidence") or "Medium",
+                            "basis": it.get("basis") or "analysis",
+                            "source_url": it.get("source_url") or it.get("evidence_url") or "",
                         })
             if not fixed:
                 fixed = defaults.get(cat) or []
@@ -6387,6 +6765,224 @@ Return ONLY JSON: {{"ai_conclusion": "one sentence", "signals_used": ["role", ..
     return base
 
 
+def _parse_public_news_date(value: Any) -> datetime | None:
+    """Parse common publisher/search dates without guessing a missing year."""
+    text = str(value or "").strip()
+    if not text or text.lower() in {"date not verified", "unknown", "recent"}:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+    except (TypeError, ValueError):
+        pass
+    for fmt in (
+        "%Y-%m-%d", "%Y/%m/%d", "%b %d, %Y", "%B %d, %Y",
+        "%d %b %Y", "%d %B %Y", "%Y-%m",
+    ):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _canonical_public_url(value: str) -> str:
+    try:
+        parsed = urlparse(str(value or "").strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        host = parsed.netloc.lower().removeprefix("www.")
+        path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/")
+        return f"{host}{path}"
+    except Exception:
+        return ""
+
+
+def _sanitize_recent_news(report: dict, company_name: str, domain: str, intel: dict) -> list[dict]:
+    """Keep only company news supported by text from a page the app retrieved."""
+    page_rows = list((intel or {}).get("_scraped_pages") or [])
+    allowed_urls = {
+        _canonical_public_url(str(row.get("url") or ""))
+        for row in page_rows
+        if isinstance(row, dict) and row.get("retrieved") is not False and row.get("text")
+    }
+    page_text = {
+        _canonical_public_url(str(row.get("url") or "")): str(row.get("text") or "")[:5000]
+        for row in page_rows
+        if isinstance(row, dict) and row.get("url") and row.get("retrieved") is not False and row.get("text")
+    }
+    rows = []
+    seen = set()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for item in (report.get("recent_news") or []):
+        if not isinstance(item, dict):
+            continue
+        source_url = str(item.get("source_url") or item.get("url") or "").strip()
+        canonical = _canonical_public_url(source_url)
+        if not canonical or canonical not in allowed_urls or auth.is_junk_citation(source_url):
+            continue
+        source_text = page_text.get(canonical, "")
+        title = re.sub(r"\s+", " ", str(item.get("title") or "")).strip()
+        summary = re.sub(r"\s+", " ", str(item.get("summary") or item.get("description") or "")).strip()
+        evidence_blob = " ".join((title, source_text))
+        if not title or not _blob_matches_brand(evidence_blob, company_name, domain):
+            continue
+        normalized_title = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+        normalized_source = re.sub(r"[^a-z0-9]+", " ", source_text.lower())
+        title_terms = {word for word in normalized_title.split() if len(word) >= 4}
+        if not normalized_title or (
+            normalized_title not in normalized_source
+            and (len(title_terms) < 3 or len(title_terms & set(normalized_source.split())) / len(title_terms) < 0.7)
+        ):
+            continue
+        title_offset = source_text.lower().find(title.lower())
+        if title_offset < 0:
+            matching_offsets = [source_text.lower().find(term) for term in title_terms if source_text.lower().find(term) >= 0]
+            title_offset = min(matching_offsets) if matching_offsets else 0
+        source_excerpt = source_text[title_offset:title_offset + 900]
+        date_text = str(item.get("date") or item.get("published_at") or item.get("published") or "").strip()
+        parsed_date = _parse_public_news_date(date_text)
+        if parsed_date:
+            date_forms = {
+                parsed_date.strftime(fmt).lower()
+                for fmt in ("%Y-%m-%d", "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y")
+            }
+            if not any(date_form in source_text.lower() for date_form in date_forms):
+                parsed_date = None
+        if parsed_date:
+            if parsed_date > now.replace(hour=23, minute=59, second=59, microsecond=0):
+                continue
+            if (now - parsed_date).days > 548:
+                continue
+            date_text = parsed_date.strftime("%Y-%m-%d")
+            date_status = "date-verified"
+        else:
+            date_text = "Date not verified"
+            date_status = "date-unverified"
+        key = (title.lower(), canonical)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            **item,
+            "title": title[:180],
+            "date": date_text,
+            "date_status": date_status,
+            "source_url": source_url,
+            "summary": (_clean_snippet(source_excerpt, 360) or "")[:360],
+            "confidence": item.get("confidence") or ("Medium" if parsed_date else "Low"),
+        })
+    rows.sort(key=lambda row: (
+        row.get("date_status") != "date-verified",
+        -(_parse_public_news_date(row.get("date")).timestamp())
+        if _parse_public_news_date(row.get("date")) else 0,
+    ))
+    return rows[:4]
+
+
+def _company_ai_conclusion(company_name: str, report: dict) -> dict:
+    """Summarize the company and evidence; do not turn hiring links into the whole conclusion."""
+    profile = report.get("company_profile") if isinstance(report.get("company_profile"), dict) else {}
+    market = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+    products = report.get("products_services") if isinstance(report.get("products_services"), dict) else {}
+
+    def _value(field):
+        return _field_text(field) if field is not None else ""
+
+    def _is_unverified_ai_fact(field):
+        if not isinstance(field, dict):
+            return False
+        status = str(field.get("verification_status") or "").lower()
+        source = str(field.get("source") or "").lower()
+        return status in {"model-knowledge-reviewed", "search-snippet-supported"} or "unverified" in source
+
+    offerings = []
+    for row in (products.get("primary_offerings") or [])[:6]:
+        value = row.get("item") or row.get("value") if isinstance(row, dict) else row
+        if (
+            value
+            and str(value).strip()
+            and "not publicly" not in str(value).lower()
+            and not _is_unverified_ai_fact(row)
+        ):
+            offerings.append(str(value).strip()[:140])
+    market_position = market.get("market_position")
+    geographic_reach = market.get("geographic_reach")
+    snapshot = {
+        "company": company_name,
+        "domain": (report.get("_meta") or {}).get("domain") or "",
+        "description": _value(profile.get("description")),
+        "industry": _value(market.get("industry") or profile.get("industry")),
+        "products_services": offerings,
+        "market_position": "" if _is_unverified_ai_fact(market_position) else _value(market_position),
+        "geographic_reach": "" if _is_unverified_ai_fact(geographic_reach) else _value(geographic_reach),
+        "recent_news": [
+            {"title": n.get("title"), "date": n.get("date"), "summary": n.get("summary"), "source_url": n.get("source_url")}
+            for n in (report.get("recent_news") or [])[:4]
+            if isinstance(n, dict) and n.get("date_status") == "date-verified"
+        ],
+        "verified_hiring": [
+            {"role": h.get("role"), "source_url": h.get("source_url")}
+            for h in (report.get("hiring_signals") or [])[:4] if isinstance(h, dict)
+        ],
+        "evidence_links": [
+            {"title": c.get("title"), "url": c.get("url")}
+            for c in ((report.get("_meta") or {}).get("citations") or [])[:8]
+            if isinstance(c, dict) and c.get("url")
+        ],
+    }
+    supported_fields = [
+        label for label, value in (
+            ("Company profile", snapshot["description"]),
+            ("Products and services", offerings),
+            ("Market position", snapshot["market_position"]),
+            ("Geographic reach", snapshot["geographic_reach"]),
+            ("Recent news", snapshot["recent_news"]),
+            ("Verified hiring", snapshot["verified_hiring"]),
+        ) if value
+    ]
+    if not any((snapshot["description"], offerings, snapshot["market_position"], snapshot["geographic_reach"])):
+        return {
+            "ai_conclusion": f"Public evidence is too limited to make a specific company-level conclusion about {company_name}.",
+            "signals_used": [],
+            "source": "Evidence-limited fallback",
+        }
+    try:
+        raw = llm_client.chat(
+            [
+                {"role": "system", "content": "Return JSON only. Summarize only the supplied company facts; never invent facts or cite a source not listed."},
+                {"role": "user", "content": f"""Write a concise 1–2 sentence company-level conclusion for this research report.
+Describe what the company does and the market/geography it serves when supported. Mention a recent development only if it is dated and company-specific. Hiring may be one signal, but do not make the conclusion a list of job boards or job links. Separate fact from inference and avoid claims about strategy, growth, or market leadership unless directly supported. If evidence is thin, say so.
+
+REPORT FACTS:
+{json.dumps(snapshot, ensure_ascii=False)[:4200]}
+
+Return JSON: {{"ai_conclusion":"...","signals_used":["one of: {', '.join(supported_fields)}"]}}"""},
+            ],
+            temperature=0.0,
+            max_tokens=320,
+            json_mode=True,
+            timeout=35.0,
+            reasoning_effort="low",
+        )
+        data = _parse_llm_json(raw)
+        conclusion = re.sub(r"\s+", " ", str(data.get("ai_conclusion") or "")).strip()
+        if conclusion and len(conclusion) <= 700:
+            allowed = set(supported_fields)
+            used = [str(x) for x in (data.get("signals_used") or []) if str(x) in allowed]
+            return {"ai_conclusion": conclusion, "signals_used": used, "source": "AI synthesis of report evidence"}
+    except Exception as exc:  # noqa: BLE001 - readable fallback is still available
+        print(f"[Research] Company conclusion generation failed: {exc}")
+    description = snapshot["description"] or "; ".join(offerings)
+    if snapshot["industry"] and description and snapshot["industry"].lower() not in description.lower():
+        description = f"{description} ({snapshot['industry']})"
+    return {
+        "ai_conclusion": f"{company_name} is described in available public sources as {description[:360]}. Recent strategic conclusions are limited to the evidence collected.",
+        "signals_used": [x for x in supported_fields if x in {"Company profile", "Products and services", "Market position", "Geographic reach"}],
+        "source": "Evidence-based fallback",
+    }
+
+
 def _has_target_evidence(scraped: dict, wiki: dict, wikidata: dict) -> bool:
     """Require at least one real public signal before synthesising a report."""
     scraped = scraped or {}
@@ -6676,7 +7272,7 @@ def run(url: str) -> dict:
             report["company_profile"]["name"] = company_name
     else:
         print("[Research] Phase 3b: LLM-as-judge validating report...")
-        report = _apply_llm_judge(report, scraped, company_name, url)
+        report = _apply_llm_judge(report, scraped, company_name, url, intel)
         if isinstance(report.get("company_profile"), dict) and report["company_profile"].get("name"):
             company_name = _anchor_company_name(report["company_profile"]["name"], domain, scraped)
             report["company_profile"]["name"] = company_name
@@ -6805,15 +7401,29 @@ def run(url: str) -> dict:
         seen_keys.add(key)
         uniq_hire.append(h)
     report["hiring_signals"] = uniq_hire[:8]
-    conc = auth.hiring_conclusion(company_name, uniq_hire)
-    report["ai_conclusion"] = conc.get("ai_conclusion") or ""
-    report["signals_used"] = conc.get("signals_used") or []
+    report["recent_news"] = _sanitize_recent_news(report, company_name, domain, intel)
 
     citations = []
     seen_urls = set()
+    retrieved_public_urls = {
+        _canonical_public_url(str(page.get("url") or ""))
+        for page in (intel.get("_scraped_pages") or [])
+        if isinstance(page, dict) and page.get("retrieved") is not False and page.get("text")
+    }
+    retrieved_public_urls.update(
+        _canonical_public_url(str(source_url))
+        for source_url in (scraped.get("contact_data") or {}).get("source_pages", [])
+        if source_url
+    )
+    if wiki.get("url") and wiki.get("text"):
+        retrieved_public_urls.add(_canonical_public_url(wiki["url"]))
+    if wd.get("source_url"):
+        retrieved_public_urls.add(_canonical_public_url(wd["source_url"]))
+    if scraped.get("_homepage_reachable") and not scraped.get("_scrape_blocked"):
+        retrieved_public_urls.add(_canonical_public_url(url))
 
     # also skip discovery of zauba in _add_cite helper when disabled
-    def _add_cite(title, cite_url, category="Web"):
+    def _add_cite(title, cite_url, category="Web", retrieved=None):
         if not cite_url or not str(cite_url).startswith("http"):
             return
         if auth.is_junk_citation(cite_url):
@@ -6830,6 +7440,10 @@ def run(url: str) -> dict:
             return
         if not d:
             return
+        was_retrieved = (
+            _canonical_public_url(cite_url) in retrieved_public_urls
+            if retrieved is None else bool(retrieved)
+        )
         cat = category
         if cat in ("Web", "Search", "Public Web", "Social Media"):
             cat = auth.classify_source(cite_url, domain)
@@ -6838,22 +7452,24 @@ def run(url: str) -> dict:
             "url": cite_url,
             "domain": d,
             "category": cat,
+            "retrieved": was_retrieved,
             "favicon": f"https://www.google.com/s2/favicons?domain={d}&sz=64",
         })
 
-    _add_cite(company_name + " Website", url, "Company Website")
+    _add_cite(company_name + " Website", url, "Company Website", retrieved=bool(scraped.get("_homepage_reachable") and not scraped.get("_scrape_blocked")))
     if wd.get("source_url"):
-        _add_cite("Wikidata", wd["source_url"], "Wikidata")
+        _add_cite("Wikidata", wd["source_url"], "Wikidata", retrieved=True)
     if scraped.get("wikipedia_url"):
-        _add_cite("Wikipedia", scraped["wikipedia_url"], "Encyclopedia")
+        _add_cite("Wikipedia", scraped["wikipedia_url"], "Encyclopedia", retrieved=True)
     elif scraped.get("wikipedia_text"):
         _add_cite(
             "Wikipedia",
             f"https://en.wikipedia.org/wiki/{company_name.replace(' ', '_')}",
             "Wikipedia",
+            retrieved=bool(scraped.get("wikipedia_text")),
         )
     for cp in (scraped.get("contact_data") or {}).get("source_pages", []):
-        _add_cite("Contact / Footer", cp, "Contact")
+        _add_cite("Contact / Footer", cp, "Contact", retrieved=True)
     for contact_url in ((report.get("contact_intelligence") or {}).get("public_point_of_contact") or {}).get("source_urls", []):
         _add_cite("Public contact evidence", contact_url, "Public Web")
     for profile_url in (report.get("ai_enrichment") or {}).get("source_urls", []):
@@ -6866,12 +7482,17 @@ def run(url: str) -> dict:
         page_url = page.get("url") or ""
         if "zaubacorp.com" in page_url.lower():
             continue
-        _add_cite(page.get("title") or page.get("domain", ""), page_url, page.get("category", "Public Web"))
+        _add_cite(
+            page.get("title") or page.get("domain", ""),
+            page_url,
+            page.get("category", "Public Web"),
+            retrieved=page.get("retrieved") is not False and bool(page.get("text")),
+        )
     for s in intel.get("_source_urls", []):
         s_url = s.get("url") or ""
         if "zaubacorp.com" in s_url.lower():
             continue
-        _add_cite(s.get("title", ""), s_url, s.get("category", "Search"))
+        _add_cite(s.get("title", ""), s_url, s.get("category", "Search"), retrieved=False)
     for n in (report.get("recent_news") or []):
         if isinstance(n, dict) and n.get("source_url"):
             _add_cite(n.get("title") or n.get("source", ""), n["source_url"], "News")
@@ -6942,13 +7563,19 @@ def run(url: str) -> dict:
     )
     report["market_analysis"] = ma
     fin = report.get("financial_data") if isinstance(report.get("financial_data"), dict) else {}
-    cleaned_rev = auth.sanitize_revenue(fin.get("revenue_estimate"))
+    raw_revenue = fin.get("revenue_estimate")
+    cleaned_rev = auth.sanitize_revenue(raw_revenue)
     if cleaned_rev:
         fin["revenue_estimate"] = _field(
             cleaned_rev,
-            (fin.get("revenue_estimate") or {}).get("source") if isinstance(fin.get("revenue_estimate"), dict) else "Public filings",
+            raw_revenue.get("source") if isinstance(raw_revenue, dict) else "Public filings",
             "High" if wd.get("revenue") else "Medium",
         )
+        if isinstance(raw_revenue, dict):
+            for key in ("verification_status", "source_urls"):
+                if key in raw_revenue:
+                    fin["revenue_estimate"][key] = raw_revenue[key]
+        cp["annual_revenue"] = dict(fin["revenue_estimate"])
     else:
         fin["revenue_estimate"] = _field("Not publicly available", "Public filings", "Low")
     report["financial_data"] = fin
@@ -6998,6 +7625,10 @@ def run(url: str) -> dict:
         "ai_profile_judge_score": (report.get("ai_enrichment") or {}).get("judge_score", 0),
         "ai_profile_evidence_count": (report.get("ai_enrichment") or {}).get("evidence_count", 0),
     }
+    conclusion = _company_ai_conclusion(company_name, report)
+    report["ai_conclusion"] = conclusion.get("ai_conclusion") or ""
+    report["signals_used"] = conclusion.get("signals_used") or []
+    report["ai_conclusion_source"] = conclusion.get("source") or "AI synthesis"
     report["intelligence_score"] = auth.compute_honest_scores(
         report, citations=citations, judge_quality=judge_q
     )

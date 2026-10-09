@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Briefcase, ChevronDown, ExternalLink, Link2, Plus, Radar, Trash2, Upload } from 'lucide-react';
+import { Briefcase, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Link2, Plus, Radar, Trash2, Upload } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 import { api } from '../api/client';
 import TagInput from '../components/ui/TagInput';
@@ -31,6 +31,8 @@ const URL_STEPS = [
 
 const MAX_LIVE_SCAN_SKILLS = 5;
 const STREAM_BATCH_SIZE = 5;
+const MAX_SCAN_RESULTS = 50;
+const JOBS_PER_PAGE = 20;
 const LIVE_JOB_LOCATIONS = [
   { id: 'india', label: 'India' },
   { id: 'uk', label: 'UK' },
@@ -121,6 +123,7 @@ export default function LiveJobsPage() {
   const toast = useToast();
   const [bench, setBench] = useState(null);
   const [scan, setScan] = useState(null);
+  const [jobPage, setJobPage] = useState(1);
   const [jobUrl, setJobUrl] = useState('');
   const [loadingScan, setLoadingScan] = useState(false);
   const [loadingBench, setLoadingBench] = useState(false);
@@ -129,7 +132,7 @@ export default function LiveJobsPage() {
   const [loadingIngest, setLoadingIngest] = useState(false);
   const [liveScanSkills, setLiveScanSkills] = useState([]);
   const [liveScanLocations, setLiveScanLocations] = useState([]);
-  const [streamProgress, setStreamProgress] = useState({ received: 0, total: null, batch: 0, phase: '' });
+  const [streamProgress, setStreamProgress] = useState({ received: 0, total: null, batch: 0, phase: '', elapsedSeconds: 0, stage: '' });
   const streamAbortRef = useRef(null);
   const streamRunIdRef = useRef(0);
 
@@ -137,6 +140,10 @@ export default function LiveJobsPage() {
   const verifiedJobs = jobs.filter((job) => job.recency !== 'date_unverified');
   const unverifiedJobs = jobs.filter((job) => job.recency === 'date_unverified');
   const displayJobs = [...verifiedJobs, ...unverifiedJobs];
+  const jobPageCount = Math.max(1, Math.ceil(displayJobs.length / JOBS_PER_PAGE));
+  const safeJobPage = Math.min(jobPage, jobPageCount);
+  const pageOffset = (safeJobPage - 1) * JOBS_PER_PAGE;
+  const pageJobs = displayJobs.slice(pageOffset, pageOffset + JOBS_PER_PAGE);
   const people = bench?.people || {};
   const peopleList = Object.values(people).filter((p) => p?.loaded);
 
@@ -230,8 +237,9 @@ export default function LiveJobsPage() {
     const setLoading = isScan ? setLoadingScan : setLoadingIngest;
 
     setScan(null);
+    setJobPage(1);
     setError('');
-    setStreamProgress({ received: 0, total: null, batch: 0, phase: '' });
+    setStreamProgress({ received: 0, total: null, batch: 0, phase: '', elapsedSeconds: 0, stage: '' });
     setLoading(true);
 
     const onEvent = (event) => {
@@ -250,10 +258,16 @@ export default function LiveJobsPage() {
         });
         setStreamProgress((current) => ({
           ...current,
-          received: event.received_jobs ?? current.received,
+          received: Math.max(current.received, event.received_jobs ?? 0),
           total: event.total_jobs ?? current.total,
           batch: event.batch_index ?? current.batch,
           phase: event.phase || current.phase,
+        }));
+      } else if (event.type === 'progress') {
+        setStreamProgress((current) => ({
+          ...current,
+          elapsedSeconds: event.elapsed_seconds ?? current.elapsedSeconds,
+          stage: event.stage || current.stage,
         }));
       } else if (event.type === 'complete') {
         const result = isScan ? event.result : normalizeIngestResult(event.result, peopleList.length);
@@ -263,6 +277,7 @@ export default function LiveJobsPage() {
           received: result?.jobs?.length || 0,
           total: result?.jobs?.length || 0,
           phase: 'complete',
+          stage: 'Search complete',
         }));
       }
     };
@@ -471,7 +486,7 @@ export default function LiveJobsPage() {
               </Button>
             </div>
             <p className="form-hint">
-              Results arrive in groups of 5, up to 20 exact public listings. Find last 2 weeks uses the pasted source and keeps verifiably dated posts. Greenhouse boards are checked through their public job-board API. Leave the URL box empty to scan recent live jobs. If fewer listings pass the date/source checks, none are invented.
+              Results stream in groups of 5. The scan searches for up to {MAX_SCAN_RESULTS} valid public listings, with at most {JOBS_PER_PAGE} shown per page. LinkedIn searches up to four pages per role query; public Naukri searches use up to eight queries. Results are deduplicated and capped at 50. Find last 2 weeks keeps verifiably dated posts; Greenhouse boards are checked through their public job-board API. Leave the URL box empty to scan recent live jobs. The app can return fewer than 50 when sources, date checks, or filters leave fewer valid listings.
             </p>
           </form>
         </Card>
@@ -484,7 +499,13 @@ export default function LiveJobsPage() {
 
         {(loadingScan || loadingIngest) && streamProgress.received > 0 && (
           <Banner tone="info" title="Live results are arriving">
-            Showing {streamProgress.received}{streamProgress.total ? ` of ${streamProgress.total}` : ''} result{streamProgress.received === 1 ? '' : 's'} now. New verified results are released in batches of {STREAM_BATCH_SIZE}.
+            Showing {streamProgress.received}{streamProgress.total ? ` of ${streamProgress.total}` : ''} result{streamProgress.received === 1 ? '' : 's'} now. New results are released in batches of {STREAM_BATCH_SIZE}. {streamProgress.stage ? `${streamProgress.stage}.` : ''} {streamProgress.elapsedSeconds ? `${streamProgress.elapsedSeconds}s elapsed.` : ''}
+          </Banner>
+        )}
+
+        {(loadingScan || loadingIngest) && streamProgress.received === 0 && streamProgress.elapsedSeconds > 0 && (
+          <Banner tone="info" title="Search is still active">
+            {streamProgress.stage || 'Checking public job sources'} · {streamProgress.elapsedSeconds}s elapsed. The search will report partial results if the sources do not return enough listings.
           </Banner>
         )}
 
@@ -529,7 +550,7 @@ export default function LiveJobsPage() {
                 </p>
                 {source === 'naukri' && (
                   <p className="form-hint">
-                    Showing {stats.displayed_jobs ?? 0} of the 5–8 Naukri target · {Number.isFinite(scan.elapsed_ms) ? `scan took ${(scan.elapsed_ms / 1000).toFixed(1)}s` : 'scan time unavailable'}
+                    Showing {stats.displayed_jobs ?? 0} Naukri listing{stats.displayed_jobs === 1 ? '' : 's'} · {Number.isFinite(scan.elapsed_ms) ? `scan took ${(scan.elapsed_ms / 1000).toFixed(1)}s` : 'scan time unavailable'}
                   </p>
                 )}
               </div>
@@ -578,10 +599,32 @@ export default function LiveJobsPage() {
             <p className="form-hint">
               Fit compares technical skills detected in the listing text with skills extracted from each resume. Strong means at least 3 detected skills and 70% overlap; Possible means at least one match and 40% overlap. “Not found” means the skill was not extracted from the resume, not that the candidate lacks it. Listing mentions may be preferred rather than required.
             </p>
+            <div className="job-actions" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <p className="form-hint" style={{ margin: 0 }}>
+                Showing {pageOffset + 1}–{Math.min(pageOffset + JOBS_PER_PAGE, displayJobs.length)} of {displayJobs.length} collected jobs (up to {MAX_SCAN_RESULTS} per scan).
+              </p>
+              {jobPageCount > 1 && (
+                <div className="job-actions">
+                  <Button variant="secondary" size="sm" icon={ChevronLeft} disabled={safeJobPage <= 1} onClick={() => setJobPage(safeJobPage - 1)}>
+                    Previous
+                  </Button>
+                  <span className="form-hint">Page {safeJobPage} of {jobPageCount}</span>
+                  <Button variant="secondary" size="sm" icon={ChevronRight} disabled={safeJobPage >= jobPageCount} onClick={() => setJobPage(safeJobPage + 1)}>
+                    Next
+                  </Button>
+                </div>
+              )}
+            </div>
+            {pageOffset >= verifiedJobs.length && unverifiedJobs.length > 0 && (
+              <>
+                <h3 className="card__title">Posting date unverified ({unverifiedJobs.length})</h3>
+                <p className="form-hint">These Naukri results matched a public search, but the posting date could not be confirmed. They are not counted as recent or date-verified.</p>
+              </>
+            )}
             <div className="job-card-grid">
-              {displayJobs.map((job, index) => (
+              {pageJobs.map((job, index) => (
                 <Fragment key={job.id || job.url}>
-                {index === verifiedJobs.length && unverifiedJobs.length > 0 && (
+                {pageOffset < verifiedJobs.length && pageOffset + index === verifiedJobs.length && unverifiedJobs.length > 0 && (
                   <div style={{ gridColumn: '1 / -1' }}>
                     <h3 className="card__title">Posting date unverified ({unverifiedJobs.length})</h3>
                     <p className="form-hint">These Naukri results matched a public search, but the posting date could not be confirmed. They are not counted as recent or date-verified.</p>

@@ -231,6 +231,17 @@ def test_ai_profile_judge_labels_model_knowledge_and_strips_ungrounded_contact(m
                 "verification_status": "evidence-verified",
                 "source_urls": ["https://acme.example/team"],
             },
+            "business_profile": {
+                "competitor_candidates": [{
+                    "name": "SAP",
+                    "official_domain": "sap.com",
+                    "market_location": "Global",
+                    "overlap_reason": "Enterprise software overlap",
+                    "keep": True,
+                    "confidence": "High",
+                    "source_urls": ["https://sap.com/about"],
+                }],
+            },
         }),
     )
 
@@ -243,12 +254,17 @@ def test_ai_profile_judge_labels_model_knowledge_and_strips_ungrounded_contact(m
             "url": "https://acme.example/team",
             "title": "Acme leadership",
             "snippet": "Alice Example is the current CEO of Acme.",
+        }, {
+            "url": "https://sap.com/about",
+            "title": "SAP enterprise software",
+            "snippet": "SAP provides enterprise software for businesses.",
         }],
     )
 
     assert result["leadership"][0]["verification_status"] == "evidence-verified"
     assert result["point_of_contact"]["name"] == "Alice Example"
     assert result["point_of_contact"]["email"] == ""
+    assert result["business_profile"]["competitor_candidates"][0]["official_domain"] == "sap.com"
 
 
 def test_ai_profile_fallback_adds_judged_leader_and_point_of_contact(monkeypatch):

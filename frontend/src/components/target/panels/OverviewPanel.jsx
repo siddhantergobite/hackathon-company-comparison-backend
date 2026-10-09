@@ -1,5 +1,5 @@
 import { IntelRow, Tag, TagList } from '../../ui';
-import { asArray, hasData, isJunkText, pointOf, val } from '../../../utils/data';
+import { asArray, hasData, isJunkText, val } from '../../../utils/data';
 
 export default function OverviewPanel({ report }) {
   const prod = report.products_services || {};
@@ -8,8 +8,9 @@ export default function OverviewPanel({ report }) {
   const reg = report.registry_intelligence;
 
   const offerings = (Array.isArray(prod.primary_offerings) ? prod.primary_offerings : asArray(prod.value))
-    .map(pointOf)
-    .filter((name) => name && !isJunkText(name));
+    .map((row) => (typeof row === 'string' ? { item: row } : row))
+    .map((row) => ({ ...row, item: row?.item || val(row) }))
+    .filter((row) => row.item && !isJunkText(row.item));
 
   const mp = mkt.market_position;
   const mpText = typeof mp === 'object' ? val(mp) : mp;
@@ -29,8 +30,19 @@ export default function OverviewPanel({ report }) {
       <h4 className="subhead">Products &amp; services</h4>
       {offerings.length ? (
         <TagList>
-          {offerings.map((name, i) => (
-            <Tag key={`${name}-${i}`}>{name}</Tag>
+          {offerings.map((row, i) => (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} key={`${row.item}-${i}`}>
+              <Tag>{row.item}</Tag>
+              {row.verification_status === 'model-knowledge-reviewed' && (
+                <span className="cite-badge cite-badge--medium">AI knowledge - unverified</span>
+              )}
+              {row.verification_status === 'search-snippet-supported' && (
+                <span className="cite-badge cite-badge--medium">Search snippet only - page not fetched</span>
+              )}
+              {row.verification_status === 'evidence-verified' && (
+                <span className="cite-badge cite-badge--high">Evidence checked</span>
+              )}
+            </span>
           ))}
         </TagList>
       ) : (

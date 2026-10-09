@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from backend.services import llm as llm_client
 
@@ -20,6 +21,17 @@ def _parse_json(raw: str) -> dict:
     if start == -1 or end <= start:
         raise ValueError("no JSON object in judge response")
     return json.loads(raw[start : end + 1])
+
+
+def _phone_literal_in_text(phone: str, text: str) -> bool:
+    """Require a complete phone-number token, not a digit substring match."""
+    wanted = re.sub(r"\D", "", str(phone or ""))
+    if len(wanted) < 7:
+        return False
+    for match in re.finditer(r"(?<!\d)\+?\d[\d\s()./-]{5,}\d(?!\d)", str(text or "")):
+        if re.sub(r"\D", "", match.group(0)) == wanted:
+            return True
+    return False
 
 
 def judge_entity_match(
@@ -124,12 +136,26 @@ def judge_research_report(
     offerings_hint: str,
     report: dict,
     wikidata_hint: Optional[dict] = None,
+    public_evidence: Optional[list[dict]] = None,
 ) -> dict:
     """
     Validate / sanitize the research JSON. Drop wrong competitors, wrong people,
     unit-less finance, and illogical fields. Prefer empty over a confident wrong fact.
     """
     wd = wikidata_hint or {}
+    evidence_rows = []
+    for row in (public_evidence or [])[:12]:
+        if not isinstance(row, dict):
+            continue
+        source_url = str(row.get("url") or "").strip()
+        if not source_url.startswith(("http://", "https://")):
+            continue
+        evidence_rows.append({
+            "url": source_url,
+            "title": str(row.get("title") or row.get("domain") or "Public source")[:160],
+            "category": str(row.get("category") or "Public Web")[:60],
+            "excerpt": str(row.get("text") or row.get("snippet") or row.get("excerpt") or "")[:700],
+        })
     mkt = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
     fin = report.get("financial_data") if isinstance(report.get("financial_data"), dict) else {}
     snap = {
@@ -150,6 +176,10 @@ def judge_research_report(
             "geographic_reach": _field_val(mkt.get("geographic_reach")),
         },
         "revenue_estimate": _field_val(fin.get("revenue_estimate")),
+        "financial_data": {
+            key: _field_val(fin.get(key))
+            for key in ("funding_status", "total_funding", "funding_stage", "profitability_status")
+        },
         "competitors": [
             {"name": c.get("name"), "description": (c.get("description") or "")[:160]}
             for c in (report.get("competitors") or [])[:8]
@@ -216,11 +246,14 @@ WEBSITE
 - site excerpt: {site_excerpt[:1000]}
 - offerings hint: {offerings_hint[:400]}
 
+PUBLIC WEB EVIDENCE (retrieved candidate sources; use URLs only from this list):
+{json.dumps(evidence_rows, ensure_ascii=False)[:7000] or "[]"}
+
 REPORT SNAPSHOT
 {json.dumps(snap)[:7500]}
 
 RULES:
-1. Define the business domain from the website evidence and offerings above. A competitor MUST sell a materially overlapping product or service to a similar customer, not merely operate in the same country or be a famous large company. Drop the company itself, generic peer labels, and cross-domain peers.
+1. Define the business domain from the website and retrieved public evidence. A competitor MUST sell a materially overlapping product or service to similar customers in an evidenced market. Drop the company itself, generic peer labels, and cross-domain peers. Return fewer than three if the evidence does not support three. Include an official domain only when a supplied source supports it, and include the supporting evidence URL.
 2. Leadership:
    - Keep CURRENT operating executives (CEO, MD, President, Chair, CFO, CTO, COO) only when the same-company evidence or domain-matched Wikidata supports the person and role.
    - Treat CEO, Founder, Chairman, Chairperson, and board roles as separate claims. Never transfer a person from a similarly named company or a subsidiary.
@@ -230,25 +263,45 @@ RULES:
    - If Wikidata lists a CEO, that person MUST appear as current CEO. Do not substitute a cofounder.
    - If the evidence does not clearly identify a role, omit it. Do not fill a missing person from model memory.
 3. geographic_reach.value MUST be a short human string (e.g. "Global" or "India and Middle East"). Never an object.
-4. Revenue: keep ONLY if it has a currency AND a scale (million/billion/crore) or a 9+ digit amount. Reject stock prices like "$507.29". Prefer Wikidata revenue when present. Otherwise "Not publicly available".
+4. Revenue and funding: keep a value only when the exact company and value are supported by a supplied evidence excerpt/source URL. Revenue and funding totals also need a currency and scale (million/billion/crore) or a 9+ digit amount. Reject stock prices like "$507.29". Prefer domain-matched Wikidata revenue. Never infer funding stage or profitability. Otherwise use "Not publicly available".
 5. market_position must be a real business summary — never login pages, cookie banners, or unrelated SaaS.
-6. Review every supplied report section, including SWOT, risks, news, hiring, contacts, products, leadership, competitors, and finance. Penalize unsupported or cross-domain claims; a complete-looking section is not evidence of accuracy.
-7. quality_score is AUTHENTICITY 0-100, NOT completeness. Penalize missing current CEO, unit-less revenue, weak sources, and cross-domain people/competitors. Typical honest range is 45-85. Never 100 unless Wikidata+official site agree on identity, CEO, and HQ.
-8. Indian MCA / ZaubaCorp is disabled. Always drop_registry=true.
-9. Return JSON ONLY:
+6. Review every supplied report section, including SWOT, risks, news, hiring, contacts, products, leadership, competitors, and finance. For SWOT and risk entries, retain only claims that point to a supplied source URL. Label strategic implications as analysis/inference, not fact. Do not create opportunities, threats, or a numeric overall risk level from generic industry assumptions.
+7. Keep a news item only when a supplied public source clearly concerns this exact company. Do not call an undated item “latest”; reject unrelated publication names and search-result noise.
+8. quality_score is AUTHENTICITY 0-100, NOT completeness. Penalize missing current CEO, unit-less revenue, weak sources, and cross-domain people/competitors. Typical honest range is 45-85. Never 100 unless Wikidata+official site agree on identity, CEO, and HQ.
+9. Indian MCA / ZaubaCorp is disabled. Always drop_registry=true.
+10. Return JSON ONLY:
 {{
   "display_name": "...",
   "industry": {{"value":"...","confidence":"High|Medium|Low","source":"..."}},
-  "competitors": [{{"name":"...","description":"...","strengths":"...","weaknesses":"...","threat_level":"High|Medium|Low","confidence":"Medium","source":"Judge-validated"}}],
+  "competitors": [{{"name":"...","description":"...","strengths":"...","weaknesses":"...","official_domain":"... or empty","market_location":"... or empty","overlap_reason":"...","evidence_url":"exact URL from PUBLIC WEB EVIDENCE","threat_level":"High|Medium|Low","confidence":"High|Medium|Low","source":"source domain/category"}}],
   "leadership": [{{"name":"...","role":"...","status":"current|historical","keep":true}}],
   "drop_people": ["names to remove"],
   "poc_name": "current CEO/MD/President or empty",
   "poc_title": "...",
   "geographic_reach": {{"value":"short string","confidence":"Medium","source":"..."}},
-  "revenue_estimate": {{"value":"Not publicly available or scaled amount","confidence":"Low|Medium|High","source":"..."}},
+  "revenue_estimate": {{"value":"Not publicly available or scaled amount","confidence":"Low|Medium|High","source":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE or empty"}},
+  "financial_intelligence": {{
+    "funding_status": {{"value":"... or Not publicly available","source_url":"exact URL from PUBLIC WEB EVIDENCE or empty","confidence":"Low|Medium|High"}},
+    "total_funding": {{"value":"scaled amount or Not publicly available","source_url":"exact URL from PUBLIC WEB EVIDENCE or empty","confidence":"Low|Medium|High"}},
+    "funding_stage": {{"value":"... or Not publicly available","source_url":"exact URL from PUBLIC WEB EVIDENCE or empty","confidence":"Low|Medium|High"}},
+    "profitability_status": {{"value":"... or Not publicly available","source_url":"exact URL from PUBLIC WEB EVIDENCE or empty","confidence":"Low|Medium|High"}}
+  }},
   "leadership_keep": true/false,
   "drop_registry": true,
   "market_position": {{"value":"...","confidence":"Medium","source":"Website"}},
+  "swot_analysis": {{
+    "strengths": [{{"point":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}],
+    "weaknesses": [{{"point":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}],
+    "opportunities": [{{"point":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"analysis","confidence":"High|Medium|Low"}}],
+    "threats": [{{"point":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}]
+  }},
+  "risk_assessment": {{
+    "overall_risk_level":"Low|Medium|High|Undetermined",
+    "regulatory_risks":[{{"risk":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}],
+    "competitive_risks":[{{"risk":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}],
+    "operational_risks":[{{"risk":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}],
+    "reputational_risks":[{{"risk":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}]
+  }},
   "rejected_reasons": ["..."],
   "quality_score": 0-100,
   "summary": "one sentence on data trust — mention what was removed"
@@ -268,7 +321,7 @@ RULES:
                 {"role": "user", "content": prompt},
             ],
             temperature=0.0,
-            max_tokens=2000,
+            max_tokens=3400,
             json_mode=True,
             timeout=70.0,
         )
@@ -290,6 +343,8 @@ RULES:
             "drop_people": [],
             "poc_name": "",
             "poc_title": "",
+            "swot_analysis": {"strengths": [], "weaknesses": [], "opportunities": [], "threats": []},
+            "risk_assessment": {"overall_risk_level": "Undetermined"},
             "leadership_keep": False,
             "drop_registry": True,
             "market_position": {"value": "Not publicly available", "confidence": "Low", "source": "Judge"},
@@ -313,10 +368,9 @@ def judge_ai_profile(
     """Judge the dedicated AI knowledge fallback at fact level.
 
     The normal report judge is intentionally conservative and only sees the
-    main report snapshot.  This pass is different: it receives the candidate
-    generated from model knowledge plus the crawler's exact public snippets and
-    labels every retained fact as either evidence-backed or model-knowledge
-    reviewed.  Email and phone values remain literal-evidence-only.
+    main report snapshot. This pass receives a candidate generated from model
+    knowledge plus fetched pages and search snippets. It keeps those evidence
+    levels distinct. Email and phone values remain literal-evidence-only.
     """
     candidate = candidate if isinstance(candidate, dict) else {}
     rows = []
@@ -336,11 +390,9 @@ def judge_ai_profile(
             "title": str(row.get("title") or "")[:180],
             "source": str(row.get("source") or "Public web")[:100],
             "snippet": str(row.get("snippet") or row.get("text") or "")[:900],
+            "retrieved": row.get("retrieved") is not False,
         })
 
-    evidence_text = "\n".join(
-        f"{r['title']} {r['snippet']} {r['url']}" for r in rows
-    ).lower()
     existing = [
         {"name": l.get("name"), "role": l.get("role"), "status": l.get("status")}
         for l in (existing_leaders or [])[:8]
@@ -377,6 +429,8 @@ RULES
 3. A name/title not literally present in the evidence may still be retained only
    as model-knowledge-reviewed when it is a well-known public fact and the
    company identity is unambiguous. Use Medium confidence at most in that case.
+   If a name appears only in an unfetched search snippet, label it
+   search-snippet-supported; do not call the linked page fetched or verified.
 4. Keep email or phone ONLY when the exact value appears in the evidence. Never
    infer an address pattern, guess a number, or reveal private contact details.
 5. A point of contact must be a current operating executive or an explicitly
@@ -385,6 +439,14 @@ RULES
    identity is unambiguous; mark those facts model-knowledge-reviewed.
 7. Drop unsupported, low-confidence, wrong-company, duplicate, and page-chrome
    claims. Prefer an empty value to a confident error.
+8. Products/services, market position, and geographic reach may be retained from
+   model knowledge only as Medium-confidence suggestions. They are not verified
+   claims unless a supplied evidence record supports them.
+9. Competitor candidates must overlap in business domain and operating market.
+   Keep a candidate without evidence only as a model-knowledge suggestion; do
+   not present it as a verified competitor. Never guess an official domain.
+10. Do not infer recent news, current hiring, revenue/funding, emails, or phone
+    numbers from model memory. Those require literal current public evidence.
 
 Return ONLY JSON:
 {{
@@ -396,7 +458,7 @@ Return ONLY JSON:
     "status": "current|historical",
     "keep": true,
     "confidence": "High|Medium|Low",
-    "verification_status": "evidence-verified|model-knowledge-reviewed",
+    "verification_status": "evidence-verified|search-snippet-supported|model-knowledge-reviewed",
     "source_urls": ["exact URLs from EXISTING EVIDENCE"],
     "reason": "short reason"
   }}],
@@ -407,7 +469,7 @@ Return ONLY JSON:
     "email": "",
     "phone": "",
     "confidence": "High|Medium|Low",
-    "verification_status": "evidence-verified|model-knowledge-reviewed",
+    "verification_status": "evidence-verified|search-snippet-supported|model-knowledge-reviewed",
     "source_urls": [],
     "reason": "short reason"
   }},
@@ -415,17 +477,16 @@ Return ONLY JSON:
     "keep": true,
     "value": "city, country",
     "confidence": "High|Medium|Low",
-    "verification_status": "evidence-verified|model-knowledge-reviewed",
+    "verification_status": "evidence-verified|search-snippet-supported|model-knowledge-reviewed",
     "source_urls": [],
     "reason": "short reason"
   }},
-  "founded": {{
-    "keep": true,
-    "value": "YYYY",
-    "confidence": "High|Medium|Low",
-    "verification_status": "evidence-verified|model-knowledge-reviewed",
-    "source_urls": [],
-    "reason": "short reason"
+  "founded": {{"keep":true,"value":"YYYY","confidence":"High|Medium|Low","verification_status":"evidence-verified|search-snippet-supported|model-knowledge-reviewed","source_urls":[],"reason":"short reason"}},
+  "business_profile": {{
+    "products_services": [{{"item":"...","keep":true,"confidence":"High|Medium|Low","verification_status":"evidence-verified|search-snippet-supported|model-knowledge-reviewed","source_urls":[],"reason":"..."}}],
+    "market_position": {{"keep":true,"value":"...","confidence":"High|Medium|Low","verification_status":"evidence-verified|search-snippet-supported|model-knowledge-reviewed","source_urls":[],"reason":"..."}},
+    "geographic_reach": {{"keep":true,"value":"...","confidence":"High|Medium|Low","verification_status":"evidence-verified|search-snippet-supported|model-knowledge-reviewed","source_urls":[],"reason":"..."}},
+    "competitor_candidates": [{{"name":"...","official_domain":"... or empty","market_location":"... or empty","overlap_reason":"...","keep":true,"confidence":"High|Medium|Low","verification_status":"evidence-verified|search-snippet-supported|model-knowledge-reviewed","source_urls":[],"reason":"..."}}]
   }}
 }}
 """
@@ -483,11 +544,21 @@ Return ONLY JSON:
             return value.strip().lower() not in {"", "0", "false", "no", "reject", "drop"}
         return bool(value)
 
-    def _evidence_urls_for(name):
+    def _matching_evidence_rows(name):
         needle = str(name or "").strip().lower()
         if not needle:
             return []
-        return [r["url"] for r in rows if needle in f"{r['title']} {r['snippet']}".lower()][:3]
+        return [r for r in rows if needle in f"{r['title']} {r['snippet']}".lower()]
+
+    def _evidence_urls_for(name):
+        return [r["url"] for r in _matching_evidence_rows(name)][:3]
+
+    def _evidence_status(matches):
+        if any(row.get("retrieved") for row in matches):
+            return "evidence-verified"
+        if matches:
+            return "search-snippet-supported"
+        return "model-knowledge-reviewed"
 
     leaders = []
     for row in data.get("leadership") or []:
@@ -501,17 +572,19 @@ Return ONLY JSON:
         score = _score(row.get("score"), 65 if confidence != "Low" else 35)
         if confidence == "Low" or score < 55:
             continue
-        urls = _urls(row.get("source_urls"))
-        evidence_hit = name.lower() in evidence_text
+        name_matches = _matching_evidence_rows(name)
+        evidence_hit = bool(name_matches)
+        matching_urls = {match["url"] for match in name_matches}
+        urls = [u for u in _urls(row.get("source_urls")) if u in matching_urls]
         status = str(row.get("verification_status") or "").strip().lower()
         if evidence_hit:
-            status = "evidence-verified"
+            status = _evidence_status(name_matches)
             urls = urls or _evidence_urls_for(name)
         else:
             status = "model-knowledge-reviewed"
             confidence = "Medium" if confidence == "High" else confidence
-        if not evidence_hit and status == "evidence-verified":
-            status = "model-knowledge-reviewed"
+        if status != "evidence-verified":
+            confidence = "Medium" if confidence == "High" else confidence
         leaders.append({
             "name": name,
             "role": role,
@@ -531,15 +604,28 @@ Return ONLY JSON:
         title = re.sub(r"\s+", " ", str(poc.get("title") or "")).strip(" ,;.")
         email = str(poc.get("email") or "").strip().lower()
         phone = str(poc.get("phone") or "").strip()
-        urls = _urls(poc.get("source_urls"))
-        if email and email not in evidence_text:
+        name_matches = _matching_evidence_rows(name)
+        email_matches = [
+            row for row in rows
+            if email and email in f"{row['title']} {row['snippet']}".lower()
+        ]
+        phone_matches = [
+            row for row in rows
+            if phone and _phone_literal_in_text(phone, f"{row['title']} {row['snippet']}")
+        ]
+        if not email_matches:
             email = ""
-        phone_digits = re.sub(r"\D", "", phone)
-        if phone and (not phone_digits or phone_digits not in re.sub(r"\D", "", evidence_text)):
+        if not phone_matches:
             phone = ""
-        evidence_hit = bool(name and name.lower() in evidence_text)
-        leader_names = {l["name"].lower() for l in leaders if l.get("status") == "current"}
-        if not evidence_hit and name.lower() not in leader_names:
+        # Do not tie a model-known executive to a generic public mailbox or
+        # phone. Retain a contact name only when that name itself is in source
+        # text; otherwise keep any literal contact detail anonymous.
+        if not name_matches:
+            name, title = "", ""
+        relevant_rows = name_matches if name else (email_matches + phone_matches)
+        matching_urls = {row["url"] for row in relevant_rows}
+        matching_rows = relevant_rows
+        if not matching_rows:
             poc = {}
         else:
             conf = _confidence(poc.get("confidence"))
@@ -547,9 +633,11 @@ Return ONLY JSON:
             if conf == "Low" or score < 55 or not (name or email or phone):
                 poc = {}
             else:
-                status = "evidence-verified" if evidence_hit else "model-knowledge-reviewed"
+                status = _evidence_status(matching_rows)
                 if status != "evidence-verified":
                     conf = "Medium" if conf == "High" else conf
+                urls = [u for u in _urls(poc.get("source_urls")) if u in matching_urls]
+                urls = urls or list(matching_urls)[:4]
                 poc = {
                     "name": name,
                     "title": title,
@@ -558,7 +646,7 @@ Return ONLY JSON:
                     "confidence": conf,
                     "verification_status": status,
                     "verification_score": score,
-                    "source_urls": urls or _evidence_urls_for(name),
+                    "source_urls": urls,
                     "reason": str(poc.get("reason") or "Reviewed by the AI profile judge")[:260],
                 }
 
@@ -572,19 +660,99 @@ Return ONLY JSON:
         score = _score(value.get("score"), 65 if conf != "Low" else 35)
         if conf == "Low" or score < 55:
             return {}
-        status = str(value.get("verification_status") or "").strip().lower()
-        status = status if status in {"evidence-verified", "model-knowledge-reviewed"} else "model-knowledge-reviewed"
-        if status == "evidence-verified" and text.lower() not in evidence_text:
-            status = "model-knowledge-reviewed"
+        fact_matches = _matching_evidence_rows(text) if len(text) >= 5 else []
+        matching_urls = {match["url"] for match in fact_matches}
+        urls = [u for u in _urls(value.get("source_urls")) if u in matching_urls]
+        urls = urls or _evidence_urls_for(text)
+        evidence_hit = bool(fact_matches and urls)
+        status = _evidence_status(fact_matches) if evidence_hit else "model-knowledge-reviewed"
+        if status != "evidence-verified":
             conf = "Medium" if conf == "High" else conf
         return {
             "value": text,
             "confidence": conf,
             "verification_status": status,
             "verification_score": score,
-            "source_urls": _urls(value.get("source_urls")),
+            "source_urls": urls,
             "reason": str(value.get("reason") or "Reviewed by the AI profile judge")[:260],
         }
+
+    business = data.get("business_profile") if isinstance(data.get("business_profile"), dict) else {}
+    products = []
+    seen_products = set()
+    for row in business.get("products_services") or []:
+        if not isinstance(row, dict) or not _keep(row.get("keep")):
+            continue
+        item = re.sub(r"\s+", " ", str(row.get("item") or row.get("value") or "")).strip(" ,;.")
+        if not item or len(item) > 120 or item.lower() in seen_products:
+            continue
+        conf = _confidence(row.get("confidence"))
+        if conf == "Low":
+            continue
+        item_matches = _matching_evidence_rows(item) if len(item) >= 5 else []
+        matching_urls = {match["url"] for match in item_matches}
+        urls = [u for u in _urls(row.get("source_urls")) if u in matching_urls]
+        urls = urls or _evidence_urls_for(item)
+        evidence_hit = bool(item_matches and urls)
+        status = _evidence_status(item_matches) if evidence_hit else "model-knowledge-reviewed"
+        if status != "evidence-verified":
+            conf = "Medium"
+        products.append({
+            "item": item,
+            "confidence": conf,
+            "verification_status": status,
+            "source_urls": urls,
+            "reason": str(row.get("reason") or "Reviewed by the AI profile judge")[:220],
+        })
+        seen_products.add(item.lower())
+
+    competitor_candidates = []
+    seen_competitors = set()
+    for row in business.get("competitor_candidates") or []:
+        if not isinstance(row, dict) or not _keep(row.get("keep")):
+            continue
+        name = re.sub(r"\s+", " ", str(row.get("name") or "")).strip(" ,;.")
+        if not name or len(name) > 90 or name.lower() in seen_competitors:
+            continue
+        conf = _confidence(row.get("confidence"))
+        if conf == "Low":
+            continue
+        name_matches = _matching_evidence_rows(name)
+        matching_urls = {match["url"] for match in name_matches}
+        urls = [u for u in _urls(row.get("source_urls")) if u in matching_urls]
+        urls = urls or _evidence_urls_for(name)
+        evidence_hit = bool(name_matches and urls)
+        status = _evidence_status(name_matches) if evidence_hit else "model-knowledge-reviewed"
+        if status != "evidence-verified":
+            conf = "Medium"
+        official_domain = re.sub(r"^https?://|^www\.", "", str(row.get("official_domain") or "").strip(), flags=re.I).strip("/ ").lower()
+        evidence_hosts = {
+            urlparse(source_url).netloc.lower().removeprefix("www.")
+            for source_url in urls if urlparse(source_url).netloc
+        }
+        if official_domain and not any(
+            official_domain == host or host.endswith("." + official_domain) or official_domain.endswith("." + host)
+            for host in evidence_hosts
+        ):
+            official_domain = ""
+        competitor_candidates.append({
+            "name": name,
+            "official_domain": official_domain,
+            "market_location": str(row.get("market_location") or "")[:100],
+            "overlap_reason": str(row.get("overlap_reason") or "")[:220],
+            "confidence": conf,
+            "verification_status": status,
+            "source_urls": urls,
+            "reason": str(row.get("reason") or "Reviewed by the AI profile judge")[:220],
+        })
+        seen_competitors.add(name.lower())
+
+    business_profile = {
+        "products_services": products[:8],
+        "market_position": _fact(business.get("market_position")),
+        "geographic_reach": _fact(business.get("geographic_reach")),
+        "competitor_candidates": competitor_candidates[:4],
+    }
 
     score = _score(data.get("overall_score") or data.get("quality_score"), 0)
     return {
@@ -594,6 +762,7 @@ Return ONLY JSON:
         "point_of_contact": poc,
         "headquarters": _fact(data.get("headquarters")),
         "founded": _fact(data.get("founded")),
+        "business_profile": business_profile,
         "_judge_available": True,
     }
 
@@ -693,6 +862,7 @@ def judge_public_point_of_contact(
             "title": str(row.get("title") or "")[:180],
             "source": str(row.get("source") or "Public web")[:80],
             "snippet": str(row.get("snippet") or row.get("text") or "")[:700],
+            "retrieved": row.get("retrieved") is not False,
         })
 
     leaders = [
@@ -730,7 +900,8 @@ STRICT RULES
 3. Keep an email or phone number only if that exact value appears in the public evidence.
    Never infer an email pattern, guess a phone number, or turn a private personal detail
    into a contact. Prefer an official company-domain or official company-page contact.
-4. A model answer alone is not a source. If evidence is empty or ambiguous, reject.
+4. A model answer alone is not a source. An unfetched search snippet can locate a
+   candidate, but cannot verify a point of contact. Require a fetched public page.
 5. Return only URLs present in PUBLIC EVIDENCE. Never return ChatGPT/OpenAI/login URLs.
 
 Return JSON only:
@@ -774,8 +945,9 @@ Return JSON only:
             conf = "High" if float(conf) >= 0.75 else ("Medium" if float(conf) >= 0.5 else "Low")
         data["confidence"] = str(conf)
 
+        fetched_rows = [row for row in rows if row.get("retrieved")]
         evidence_text = "\n".join(
-            f"{r.get('title', '')} {r.get('snippet', '')}" for r in rows
+            f"{r.get('title', '')} {r.get('snippet', '')}" for r in fetched_rows
         ).lower()
         # A strict deterministic backstop for the fields most likely to be
         # hallucinated by a model.  The judge cannot approve values that were
@@ -784,14 +956,40 @@ Return JSON only:
         if email and email not in evidence_text:
             data["email"] = ""
         phone = str(data.get("phone") or "").strip()
-        phone_digits = re.sub(r"\D", "", phone)
-        evidence_digits = re.sub(r"\D", "", evidence_text)
-        if phone and (not phone_digits or phone_digits not in evidence_digits):
+        if phone and not _phone_literal_in_text(phone, evidence_text):
             data["phone"] = ""
         name = str(data.get("name") or "").strip()
         if name and name.lower() not in evidence_text:
             data["name"] = ""
             data["title"] = ""
+            name = ""
+        if name:
+            if data.get("email") and not any(
+                name.lower() in f"{row.get('title', '')} {row.get('snippet', '')}".lower()
+                and str(data["email"]).lower() in f"{row.get('title', '')} {row.get('snippet', '')}".lower()
+                for row in fetched_rows
+            ):
+                data["email"] = ""
+            if data.get("phone") and not any(
+                name.lower() in f"{row.get('title', '')} {row.get('snippet', '')}".lower()
+                and _phone_literal_in_text(data["phone"], f"{row.get('title', '')} {row.get('snippet', '')}")
+                for row in fetched_rows
+            ):
+                data["phone"] = ""
+        retained_fields = [str(data.get(k) or "").strip().lower() for k in ("name", "email")]
+        relevant_urls = {
+            row["url"] for row in fetched_rows
+            if any(
+                field and field in f"{row.get('title', '')} {row.get('snippet', '')}".lower()
+                for field in retained_fields
+            ) or (
+                data.get("phone")
+                and _phone_literal_in_text(data.get("phone"), f"{row.get('title', '')} {row.get('snippet', '')}")
+            )
+        }
+        data["source_urls"] = [u for u in data.get("source_urls") or [] if u in relevant_urls]
+        if not data["source_urls"] and relevant_urls:
+            data["source_urls"] = list(relevant_urls)[:4]
         if data["accept"] and not data["source_urls"]:
             data["accept"] = False
             data["reason"] = "No usable public source was returned by the judge"

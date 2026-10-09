@@ -25,6 +25,10 @@ TEST_DB = "news_data_pytest"
 def _mongo():
     from backend.news.config import get_settings
 
+    # Ensure a settings object cached from the project's .env cannot override
+    # the throwaway database used by the test suite.
+    os.environ["NEWS_MONGO_DB"] = TEST_DB
+    get_settings.cache_clear()
     assert get_settings().mongo_db == TEST_DB, "tests must never run against a real database"
     try:
         get_client().admin.command("ping")

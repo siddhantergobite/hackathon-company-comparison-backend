@@ -81,7 +81,7 @@ export default function Sidebar({ open, onNavigate }) {
         </div>
       </nav>
 
-      <div className="sidebar__footer">Public sources only — unverified facts are left blank, never guessed.</div>
+      <div className="sidebar__footer">Public sources plus clearly labeled AI suggestions; unverified contact details are not guessed.</div>
     </aside>
   );
 }

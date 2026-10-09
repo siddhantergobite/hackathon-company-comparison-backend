@@ -10,16 +10,20 @@ export function TagList({ children }) {
 
 const CONFIDENCE_TONE = { high: 'high', medium: 'medium', med: 'medium', low: 'low' };
 
-// Small "source · confidence" chips shown next to researched facts.
+// Small source, confidence, and verification chips shown next to researched facts.
 export function CiteBadge({ field }) {
   if (!field || typeof field !== 'object' || Array.isArray(field)) return null;
   const source = field.source || '';
   const confidence = String(field.confidence || '');
   const tone = CONFIDENCE_TONE[confidence.toLowerCase()] || '';
+  const verification = field.verification_status;
   return (
     <>
       {source && hasData(source) && <span className="cite-badge">{String(source)}</span>}
       {confidence && <span className={`cite-badge cite-badge--${tone}`}>● {confidence}</span>}
+      {verification === 'evidence-verified' && <span className="cite-badge cite-badge--high">Evidence checked</span>}
+      {verification === 'search-snippet-supported' && <span className="cite-badge cite-badge--medium">Search snippet only - page not fetched</span>}
+      {verification === 'model-knowledge-reviewed' && <span className="cite-badge cite-badge--medium">AI knowledge - unverified</span>}
     </>
   );
 }

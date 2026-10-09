@@ -25,7 +25,11 @@ export default function ContactsPanel({ report }) {
         <div className="contact-block">
           <strong>
             <UserRound size={15} style={{ verticalAlign: '-2px', marginRight: 6 }} aria-hidden="true" />
-            Public point of contact
+            {poc.verification_status === 'model-knowledge-reviewed'
+              ? 'Suggested executive contact'
+              : poc.verification_status === 'search-snippet-supported'
+                ? 'Search result contact lead'
+                : 'Public point of contact'}
           </strong>
           <div style={{ marginTop: 4 }}>
             {poc.name && <div><strong>{poc.name}</strong>{poc.title ? ` · ${poc.title}` : ''}</div>}
@@ -33,12 +37,11 @@ export default function ContactsPanel({ report }) {
             {hasData(poc.phone) && <div>{poc.phone}</div>}
             {poc.reason && <div className="mini-card__meta">{poc.reason}</div>}
             <CiteBadge field={poc} />
-            {poc.verification_status === 'model-knowledge-reviewed' && (
-              <span className="cite-badge cite-badge--medium">AI knowledge reviewed</span>
-            )}
-            {poc.verification_status === 'evidence-verified' && (
-              <span className="cite-badge cite-badge--high">Evidence verified</span>
-            )}
+            {asArray(poc.source_urls).filter((u) => /^https?:\/\//i.test(String(u))).slice(0, 3).map((u) => (
+              <a className="text-xs" href={u} target="_blank" rel="noopener noreferrer" key={u} style={{ marginRight: 8 }}>
+                Source
+              </a>
+            ))}
           </div>
         </div>
       )}
@@ -64,6 +67,9 @@ export default function ContactsPanel({ report }) {
           {phones.map((p, i) => (
             <div className="data-row" key={`${p.number}-${i}`}>
               <strong>{p.person_name || p.name || 'Phone'}</strong>: {p.number} <CiteBadge field={p} />
+              {asArray(p.source_urls).filter((u) => /^https?:\/\//i.test(String(u))).slice(0, 1).map((u) => (
+                <a className="text-xs" href={u} target="_blank" rel="noopener noreferrer" key={u}> Source</a>
+              ))}
             </div>
           ))}
         </>
@@ -79,6 +85,9 @@ export default function ContactsPanel({ report }) {
             <div className="data-row" key={`${e.email}-${i}`}>
               <strong>{e.person_name || e.name || e.label || 'Email'}</strong>
               {e.title ? ` (${e.title})` : ''}: {e.email} <CiteBadge field={e} />
+              {asArray(e.source_urls).filter((u) => /^https?:\/\//i.test(String(u))).slice(0, 1).map((u) => (
+                <a className="text-xs" href={u} target="_blank" rel="noopener noreferrer" key={u}> Source</a>
+              ))}
             </div>
           ))}
         </>

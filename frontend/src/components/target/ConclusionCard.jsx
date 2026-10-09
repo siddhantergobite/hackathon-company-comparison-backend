@@ -13,6 +13,11 @@ export default function ConclusionCard({ view }) {
     <Card accent>
       <CardHeader icon={Lightbulb} title="AI conclusion" />
       <p style={{ fontSize: 16, lineHeight: 1.65 }}>{view.conclusion}</p>
+      {view.conclusionSource && (
+        <p className="text-xs muted" style={{ marginTop: 8 }}>
+          {view.conclusionSource}; knowledge-only suggestions are excluded from this summary.
+        </p>
+      )}
       {signals.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <FieldLabel>Signals used</FieldLabel>

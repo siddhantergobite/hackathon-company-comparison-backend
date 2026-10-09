@@ -54,7 +54,14 @@ export default function SummaryCards({ view }) {
         )}
       </MiniCard>
 
-      <MiniCard icon={UserCheck} title="Point of contact">
+      <MiniCard
+        icon={UserCheck}
+        title={poc.verification_status === 'model-knowledge-reviewed'
+          ? 'Suggested executive'
+          : poc.verification_status === 'search-snippet-supported'
+            ? 'Search result contact lead'
+            : 'Point of contact'}
+      >
         {hasPoc ? (
           <>
             {poc.name && <Person name={poc.name} role={poc.title} />}
@@ -62,7 +69,10 @@ export default function SummaryCards({ view }) {
             {hasData(poc.phone) && <div className="mini-card__meta">{poc.phone}</div>}
             {poc.reason && <div className="mini-card__meta">{poc.reason}</div>}
             {poc.verification_status === 'model-knowledge-reviewed' && (
-              <div className="mini-card__meta">AI knowledge reviewed</div>
+              <div className="mini-card__meta">AI knowledge only - not verified as a direct company contact</div>
+            )}
+            {poc.verification_status === 'search-snippet-supported' && (
+              <div className="mini-card__meta">Found in a search snippet; linked page was not fetched</div>
             )}
             {poc.verification_status === 'evidence-verified' && (
               <div className="mini-card__meta">Evidence verified</div>

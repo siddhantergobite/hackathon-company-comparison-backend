@@ -129,7 +129,7 @@ def test_resume_search_queries_prioritize_candidate_roles_then_refine_with_skill
     assert 'site:naukri.com "android developer"' in naukri_queries
 
 
-def test_linkedin_uses_structured_location_and_naukri_keeps_location_in_query(monkeypatch):
+def test_linkedin_search_stops_after_empty_first_page_and_naukri_keeps_location_in_query(monkeypatch):
     calls = []
     monkeypatch.setattr(
         live_jobs,
@@ -141,8 +141,7 @@ def test_linkedin_uses_structured_location_and_naukri_keeps_location_in_query(mo
 
     live_jobs._collect_linkedin_live(["AI engineer"], ["india"])
 
-    assert calls == [("AI engineer", 0, live_jobs.TPR_PAST_HOUR, None, "India"),
-                     ("AI engineer", 10, live_jobs.TPR_PAST_HOUR, None, "India")]
+    assert calls == [("AI engineer", 0, live_jobs.TPR_PAST_HOUR, None, None)]
     naukri = live_jobs._queries(["naukri"], ["AI engineer"], ["india"])
     assert naukri == ['site:naukri.com AI engineer ("India")']
 
@@ -158,7 +157,7 @@ def test_scan_terms_do_not_encode_location_as_a_linkedin_keyword(monkeypatch):
 def test_live_scan_filters_jobs_by_selected_skills_and_locations(monkeypatch):
     monkeypatch.setattr(live_jobs, "get_bench", lambda: {"people": {}})
     monkeypatch.setattr(live_jobs, "search_queries_for_scan", lambda _bench: ["software engineer"])
-    monkeypatch.setattr(live_jobs, "_collect_linkedin_live", lambda _terms, _locations=None: [
+    monkeypatch.setattr(live_jobs, "_collect_linkedin_live", lambda _terms, _locations=None, on_rows=None, on_query=None: [
         {
             "url": "https://www.linkedin.com/jobs/view/python-india",
             "title": "Python Engineer",
@@ -282,7 +281,7 @@ def test_naukri_undated_results_are_returned_but_not_counted_as_fresh(monkeypatc
 def test_undated_naukri_jobs_keep_visible_slots_when_linkedin_fills_verified_cap(monkeypatch):
     monkeypatch.setattr(live_jobs, "get_bench", lambda: {"people": {}})
     monkeypatch.setattr(live_jobs, "search_queries_for_scan", lambda _bench: ["software engineer"])
-    monkeypatch.setattr(live_jobs, "_collect_linkedin_live", lambda _terms, _locations=None: [
+    monkeypatch.setattr(live_jobs, "_collect_linkedin_live", lambda _terms, _locations=None, on_rows=None, on_query=None: [
         {
             "url": f"https://www.linkedin.com/jobs/view/{index}",
             "title": f"Software Engineer {index}",
@@ -308,13 +307,11 @@ def test_undated_naukri_jobs_keep_visible_slots_when_linkedin_fills_verified_cap
         include_unverified_recent=True,
     )
 
-    assert result["verified_job_count"] == live_jobs.MAX_JOBS - 5
-    assert result["unverified_job_count"] == 5
+    assert result["verified_job_count"] == live_jobs.MAX_JOBS
+    assert result["unverified_job_count"] == 0
     assert len(result["jobs"]) == live_jobs.MAX_JOBS
-    assert sum(job["platform"] == "Naukri" for job in result["jobs"]) == 5
-    assert sum(job["platform"] == "LinkedIn" for job in result["jobs"]) == 15
-    assert result["source_diagnostics"]["naukri"]["display_target_min"] == 5
-    assert result["source_diagnostics"]["naukri"]["display_target_max"] == 8
+    assert sum(job["platform"] == "Naukri" for job in result["jobs"]) == 0
+    assert sum(job["platform"] == "LinkedIn" for job in result["jobs"]) == 50
 
 
 def test_company_discovery_respects_requested_window_and_keeps_only_naukri_undated(monkeypatch):

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,13 +37,10 @@ URL_DISCOVER_DAYS = 14
 URL_DISCOVER_MINUTES = URL_DISCOVER_DAYS * 24 * 60
 TPR_PAST_HOUR = "r3600"
 TPR_TWO_WEEKS = f"r{URL_DISCOVER_DAYS * 24 * 3600}"
-MAX_JOBS = 20
-MAX_URL_JOBS = 20
+MAX_JOBS = 50
+MAX_URL_JOBS = 50
 STREAM_BATCH_SIZE = 5
 MAX_JOB_DETAIL_FETCH = 8
-NAUKRI_SCAN_TARGET_MIN = 5
-NAUKRI_SCAN_TARGET_MAX = 8
-MAX_NAUKRI_SCAN_DETAIL_FETCH = NAUKRI_SCAN_TARGET_MIN
 PAGE_FETCH = 20
 HTTP_TIMEOUT = 10
 SEARCH_TIMEOUT_SECONDS = 6
@@ -769,19 +767,28 @@ def _queries(
     return q
 
 
-def _collect_naukri_hits(queries: list[str]) -> dict[str, Any]:
+def _collect_naukri_hits(
+    queries: list[str],
+    on_rows: Optional[Callable[[list[dict]], Optional[int]]] = None,
+) -> dict[str, Any]:
     hits: list[dict] = []
     errors: list[str] = []
     provider_counts: dict[str, int] = {}
     if not queries:
         return {"hits": hits, "errors": errors, "provider_counts": provider_counts}
-    with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
-        futures = {pool.submit(_ddg, query, 12, None): query for query in queries}
+    bounded_queries = queries[:8]
+    with ThreadPoolExecutor(max_workers=min(4, len(bounded_queries))) as pool:
+        futures = {pool.submit(_ddg, query, 12, None): query for query in bounded_queries}
         for future in as_completed(futures):
             query = futures[future]
             try:
                 rows = future.result() or []
                 hits.extend(rows)
+                if rows and on_rows and (on_rows(rows) or 0) >= MAX_JOBS:
+                    for pending in futures:
+                        if pending is not future:
+                            pending.cancel()
+                    break
                 for row in rows:
                     provider = row.get("search_provider") or "unknown"
                     provider_counts[provider] = provider_counts.get(provider, 0) + 1
@@ -982,29 +989,44 @@ def _linkedin_guest_search(
 def _collect_linkedin_live(
     keywords: Optional[list[str]] = None,
     locations: Optional[list[str]] = None,
+    on_rows: Optional[Callable[[list[dict]], Optional[int]]] = None,
+    on_query: Optional[Callable[[], None]] = None,
 ) -> list[dict]:
     jobs: list[dict] = []
     kws = [str(k).strip() for k in (keywords or []) if str(k).strip()][:8]
     if not kws:
         return jobs
-    location_values = _linkedin_location_values(locations or []) or [None]
-    with ThreadPoolExecutor(max_workers=min(8, max(1, len(kws) * len(location_values)))) as pool:
-        futs = [
-            pool.submit(_linkedin_guest_search, kw, 0, TPR_PAST_HOUR, None, location)
-            for kw in kws
-            for location in location_values
-        ]
-        if len(kws) <= 4:
-            futs.extend(
-                pool.submit(_linkedin_guest_search, kw, 10, TPR_PAST_HOUR, None, location)
-                for kw in kws
-                for location in location_values
-            )
-        for fut in as_completed(futs):
-            try:
-                jobs.extend(fut.result() or [])
-            except Exception as e:
-                print(f"[LiveJobs] LinkedIn collect: {e}")
+    # Search once per role query, then apply the selected-location filter to
+    # listing metadata. Multiplying every role by every selected country made
+    # a broad multi-location scan unnecessarily slow.
+    # Scan at most four result pages per role query. Search the next page only
+    # when the checked result count is still below 50, keeping broad filters
+    # useful without allowing an unbounded crawl.
+    for start in (0, 10, 20, 30):
+        page_had_rows = False
+        reached_result_cap = False
+        with ThreadPoolExecutor(max_workers=min(8, max(1, len(kws)))) as pool:
+            futs = {}
+            for kw in kws:
+                if on_query:
+                    on_query()
+                futs[pool.submit(_linkedin_guest_search, kw, start, TPR_PAST_HOUR)] = kw
+            for fut in as_completed(futs):
+                try:
+                    rows = fut.result() or []
+                    if rows:
+                        page_had_rows = True
+                        jobs.extend(rows)
+                        if on_rows and (on_rows(rows) or 0) >= MAX_JOBS:
+                            reached_result_cap = True
+                            for pending in futs:
+                                if pending is not fut:
+                                    pending.cancel()
+                            break
+                except Exception as e:
+                    print(f"[LiveJobs] LinkedIn collect: {e}")
+        if reached_result_cap or not page_had_rows:
+            break
     return jobs
 
 
@@ -1469,71 +1491,82 @@ def _emit_result_batches(
         })
 
 
-def _preview_linkedin_jobs(
-    rows: list[dict],
+def _candidate_for_live_stream(
+    row: dict,
+    platform: str,
+    *,
     bench: dict,
-    scan_skills: list[str],
-    scan_locations: list[str],
+    skills: list[str],
+    locations: list[str],
     minutes: int,
-) -> list[dict]:
-    """Build an early batch from already timestamped LinkedIn guest results.
+    include_unverified_recent: bool,
+    now: float,
+) -> Optional[dict]:
+    """Turn one public search hit into a checked, displayable scan result."""
+    url = _clean_job_url(row.get("url") or "")
+    if not url or not _is_job_url(url) or _platform(url) != platform:
+        return None
 
-    LinkedIn guest search is already restricted to the recent source window, so
-    these rows are safe to show while the slower Naukri/detail-page work is
-    still running.  The final scan remains authoritative and replaces the
-    preview when it completes.
-    """
-    preview: list[dict] = []
-    seen: set[str] = set()
-    for row in rows or []:
-        url = _clean_job_url(row.get("url") or "")
-        if not url or not _is_job_url(url) or _platform(url) != "LinkedIn":
-            continue
-        job_id = _job_id(url)
-        if job_id in seen:
-            continue
-        seen.add(job_id)
-        title = row.get("title") or ""
-        snippet = row.get("snippet") or ""
-        if _is_junk_listing(title, snippet):
-            continue
-        job = {
-            "id": job_id,
-            "title": title[:140],
-            "company": row.get("company") or "",
-            "location": row.get("location") or "",
-            "url": url,
-            "platform": "LinkedIn",
-            "track": row.get("track") or "software",
-            "snippet": snippet[:400],
-            "posted_minutes": row.get("posted_minutes"),
-            "first_seen_minutes": 0,
-            "recency": "pending_verify",
-            "emails": [],
-            "description": row.get("description") or snippet,
-            "source": "linkedin_guest",
-        }
-        age = job.get("posted_minutes")
+    title_raw = (row.get("title") or "").strip()
+    snippet = (row.get("snippet") or "").strip()
+    if _is_junk_listing(title_raw, snippet):
+        return None
+
+    if platform == "LinkedIn":
+        title = title_raw[:140]
+        company = row.get("company") or ""
+        track = row.get("track") or "software"
+        description = row.get("description") or snippet
+        age = row.get("posted_minutes")
+    else:
+        title, company = _split_title(title_raw)
+        track = _role_track(f"{title} {title_raw} {snippet}") or "software"
+        description = ""
+        age = row.get("posted_minutes")
         if age is None:
-            age = FALLBACK_MINUTES
-            job["posted_minutes"] = age
-            job["date_confidence"] = "source_window_only"
-        else:
-            job["date_confidence"] = "listing_timestamp"
-        if in_posted_window(age, minutes):
-            job["recency"] = "posted_in_window"
-        elif in_posted_window(age, FALLBACK_MINUTES):
-            job["recency"] = "posted_in_fallback"
-        else:
-            continue
-        if scan_skills and not _job_matches_skill_filters(job, scan_skills):
-            continue
-        if scan_locations and not _job_matches_location_filters(job, scan_locations):
-            continue
-        _attach_talent(job, bench)
-        preview.append(job)
-    preview.sort(key=lambda job: job.get("posted_minutes") if job.get("posted_minutes") is not None else 99999)
-    return preview[:STREAM_BATCH_SIZE]
+            age = extract_age_minutes(f"{title_raw} {snippet}", now)
+
+    job = {
+        "id": _job_id(url),
+        "title": (title or "Job listing")[:140],
+        "company": company,
+        "location": row.get("location") or "",
+        "url": url,
+        "platform": platform,
+        "track": track,
+        "snippet": snippet[:400],
+        "posted_minutes": age,
+        "first_seen_minutes": 0,
+        "recency": "pending_verify",
+        "emails": [],
+        "description": description[:8000],
+        "source": row.get("source") or ("linkedin_guest" if platform == "LinkedIn" else ""),
+    }
+    if skills and not _job_matches_skill_filters(job, skills):
+        return None
+    if locations and not _job_matches_location_filters(job, locations):
+        return None
+
+    if age is None and platform == "LinkedIn":
+        # LinkedIn's guest endpoint applies the past-hour window, but a missing
+        # card timestamp does not justify claiming an exact posting minute.
+        job["posted_minutes"] = FALLBACK_MINUTES
+        job["date_confidence"] = "source_window_only"
+        job["recency"] = "posted_in_fallback"
+    elif age is not None and in_posted_window(age, minutes):
+        job["date_confidence"] = "listing_timestamp"
+        job["recency"] = "posted_in_window"
+    elif age is not None and in_posted_window(age, FALLBACK_MINUTES):
+        job["date_confidence"] = "listing_timestamp"
+        job["recency"] = "posted_in_fallback"
+    elif age is None and platform == "Naukri" and include_unverified_recent:
+        job["date_confidence"] = "unverified"
+        job["recency"] = "date_unverified"
+    else:
+        return None
+
+    _attach_talent(job, bench)
+    return job
 
 
 def scan(
@@ -1584,6 +1617,57 @@ def scan(
         for source in src
     }
 
+    partial_lock = threading.Lock()
+    partial_seen: set[str] = set()
+    partial_buffer: list[dict] = []
+    partial_received = 0
+    partial_batch_index = 0
+
+    def stream_rows(rows: list[dict], platform: str) -> int:
+        """Publish validated public listings while independent searches finish."""
+        nonlocal partial_received, partial_batch_index
+        with partial_lock:
+            for row in rows:
+                job = _candidate_for_live_stream(
+                    row,
+                    platform,
+                    bench=bench,
+                    skills=scan_skills,
+                    locations=scan_locations,
+                    minutes=minutes,
+                    include_unverified_recent=include_unverified_recent,
+                    now=now,
+                )
+                if not job or job["id"] in partial_seen:
+                    continue
+                if partial_received + len(partial_buffer) >= MAX_JOBS:
+                    continue
+                partial_seen.add(job["id"])
+                partial_buffer.append(job)
+                if len(partial_buffer) == STREAM_BATCH_SIZE:
+                    batch = list(partial_buffer)
+                    partial_buffer.clear()
+                    partial_received += len(batch)
+                    if on_batch:
+                        partial_batch_index += 1
+                        _safe_stream_event(on_batch, {
+                            "type": "batch",
+                            "phase": "partial",
+                            "batch_index": partial_batch_index,
+                            "batch_count": None,
+                            "received_jobs": partial_received,
+                            "total_jobs": None,
+                            "jobs": batch,
+                            "summary": {
+                                "filters": {"skills": scan_skills, "locations": scan_locations},
+                                "_meta": {"note": "Validated public listings are streaming while other sources finish."},
+                            },
+                        })
+            return partial_received + len(partial_buffer)
+
+    def count_linkedin_query() -> None:
+        source_diagnostics["linkedin"]["queries_attempted"] += 1
+
     linkedin_rows: list[dict] = []
     naukri_search = {"hits": [], "errors": [], "provider_counts": {}}
     # Run provider searches concurrently so adding Naukri does not add its full
@@ -1592,46 +1676,23 @@ def scan(
         linkedin_future = None
         naukri_future = None
         if "linkedin" in src:
-            linkedin_location_count = max(1, len(_linkedin_location_values(scan_locations)))
-            linkedin_page_count = 2 if len(search_terms) <= 4 else 1
-            source_diagnostics["linkedin"]["queries_attempted"] = min(
-                len(search_terms) * linkedin_location_count * linkedin_page_count,
-                32,
+            linkedin_future = provider_pool.submit(
+                _collect_linkedin_live,
+                search_terms,
+                scan_locations,
+                lambda rows: stream_rows(rows, "LinkedIn"),
+                count_linkedin_query,
             )
-            linkedin_future = provider_pool.submit(_collect_linkedin_live, search_terms, scan_locations)
         if "naukri" in src:
-            source_diagnostics["naukri"]["queries_attempted"] = len(queries)
-            naukri_future = provider_pool.submit(_collect_naukri_hits, queries)
+            source_diagnostics["naukri"]["queries_attempted"] = min(len(queries), 8)
+            naukri_future = provider_pool.submit(
+                _collect_naukri_hits,
+                queries,
+                lambda rows: stream_rows(rows, "Naukri"),
+            )
         if linkedin_future:
             try:
                 linkedin_rows = linkedin_future.result() or []
-                if on_batch and linkedin_rows:
-                    preview_jobs = _preview_linkedin_jobs(
-                        linkedin_rows,
-                        bench,
-                        scan_skills,
-                        scan_locations,
-                        minutes,
-                    )
-                    if preview_jobs:
-                        _safe_stream_event(on_batch, {
-                            "type": "batch",
-                            "phase": "early",
-                            "batch_index": 1,
-                            "batch_count": None,
-                            "received_jobs": len(preview_jobs),
-                            "total_jobs": None,
-                            "jobs": preview_jobs,
-                            "summary": {
-                                "filters": {
-                                    "skills": scan_skills,
-                                    "locations": scan_locations,
-                                },
-                                "_meta": {
-                                    "note": "Early verified LinkedIn results are shown while the remaining public sources are checked.",
-                                },
-                            },
-                        })
             except Exception as exc:
                 errors.append(f"LinkedIn search failed: {type(exc).__name__}")
         if naukri_future:
@@ -1640,6 +1701,28 @@ def scan(
                 errors.extend(f"Naukri search failed: {name}" for name in naukri_search["errors"])
             except Exception as exc:
                 errors.append(f"Naukri search failed: {type(exc).__name__}")
+
+    # Send a final partial batch when the result count is not divisible by 5.
+    with partial_lock:
+        if partial_buffer:
+            batch = list(partial_buffer)
+            partial_buffer.clear()
+            partial_received += len(batch)
+            if on_batch:
+                partial_batch_index += 1
+                _safe_stream_event(on_batch, {
+                    "type": "batch",
+                    "phase": "partial",
+                    "batch_index": partial_batch_index,
+                    "batch_count": None,
+                    "received_jobs": partial_received,
+                    "total_jobs": None,
+                    "jobs": batch,
+                    "summary": {
+                        "filters": {"skills": scan_skills, "locations": scan_locations},
+                        "_meta": {"note": "Initial validated results are shown; final deduplication and ranking are still running."},
+                    },
+                })
 
     if "linkedin" in src:
         source_diagnostics["linkedin"]["search_results"] = len(linkedin_rows)
@@ -1712,32 +1795,9 @@ def scan(
             }
 
     candidates = list(jobs_map.values())
-    naukri_need_fetch = [
-        job for job in candidates
-        if job["platform"] == "Naukri"
-        and (job.get("posted_minutes") is None or len(job.get("snippet") or "") < 80)
-    ][:MAX_NAUKRI_SCAN_DETAIL_FETCH]
-    if "naukri" in source_diagnostics:
-        source_diagnostics["naukri"]["detail_pages_attempted"] = len(naukri_need_fetch)
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futs = {pool.submit(_fetch_job_page, j["url"]): j for j in naukri_need_fetch}
-        for fut in as_completed(futs):
-            job = futs[fut]
-            page = fut.result() or {}
-            html = page.get("html") or ""
-            text = page.get("text") or ""
-            if html or text:
-                source_diagnostics["naukri"]["detail_pages_read"] += 1
-            description = (page.get("description") or text).strip()
-            if description:
-                job["description"] = description[:8000]
-                job["description_source"] = (
-                    "public_job_page" if page.get("description") else "fetched_page_text"
-                )
-                job["emails"] = _emails_from(text)
-            age = extract_age_minutes(f"{html} {text} {job.get('snippet','')} {job.get('title','')}", now)
-            if age is not None:
-                job["posted_minutes"] = age
+    # Keep the general scan on the public listing cards/search snippets.
+    # Detail-page fetches add latency and do not make an index snippet's date
+    # more authoritative. Unverified Naukri dates remain labeled below.
 
     print(f"[LiveJobs] candidates={len(candidates)} linkedin={sum(1 for j in candidates if j['platform']=='LinkedIn')}")
 
@@ -1801,34 +1861,22 @@ def scan(
     if jobs_primary and fallback_used:
         applied = fallback
 
-    # Reserve up to 8 of the 20 displayed slots for Naukri. Use dated Naukri
-    # results first, then undated ones; LinkedIn fills only the remaining slots.
-    # This targets 5–8 Naukri jobs without inventing or padding results.
-    naukri_verified = sorted(
-        (job for job in jobs_primary + jobs_fallback if job.get("platform") == "Naukri"),
-        key=lambda job: job.get("posted_minutes") if job.get("posted_minutes") is not None else 99999,
-    )[:NAUKRI_SCAN_TARGET_MAX]
-    linkedin_verified = sorted(
-        (job for job in jobs_primary + jobs_fallback if job.get("platform") == "LinkedIn"),
-        key=lambda job: job.get("posted_minutes") if job.get("posted_minutes") is not None else 99999,
-    )
-    jobs_unverified.sort(key=lambda job: (job.get("company") or "").lower())
-    unverified_slots = max(0, NAUKRI_SCAN_TARGET_MAX - len(naukri_verified))
-    selected_naukri_unverified = (
-        jobs_unverified[:unverified_slots] if include_unverified_recent else []
-    )
-    selected_linkedin = linkedin_verified[: max(0, MAX_JOBS - len(naukri_verified) - len(selected_naukri_unverified))]
+    # Sort dated results across sources together, then use any remaining display
+    # capacity for Naukri results whose posting date could not be verified.
     verified_jobs = sorted(
-        naukri_verified + selected_linkedin,
+        jobs_primary + jobs_fallback,
         key=lambda job: job.get("posted_minutes") if job.get("posted_minutes") is not None else 99999,
+    )[:MAX_JOBS]
+    jobs_unverified.sort(key=lambda job: (job.get("company") or "").lower())
+    selected_naukri_unverified = (
+        jobs_unverified[: max(0, MAX_JOBS - len(verified_jobs))]
+        if include_unverified_recent else []
     )
     jobs = verified_jobs + selected_naukri_unverified
     if "naukri" in source_diagnostics:
-        source_diagnostics["naukri"]["displayed_jobs"] = len(naukri_verified) + len(selected_naukri_unverified)
-        source_diagnostics["naukri"]["display_target_min"] = NAUKRI_SCAN_TARGET_MIN
-        source_diagnostics["naukri"]["display_target_max"] = NAUKRI_SCAN_TARGET_MAX
-
-    _enrich_linkedin_descriptions(jobs)
+        source_diagnostics["naukri"]["displayed_jobs"] = sum(
+            1 for job in jobs if job.get("platform") == "Naukri"
+        )
 
     for job in jobs:
         evidence = _match_evidence(job, bench)
@@ -1871,9 +1919,6 @@ def scan(
         note += f" {len(jobs_unverified)} Naukri listing(s) had no verifiable posting date and were omitted."
     elif include_unverified_recent and any(j.get("recency") == "date_unverified" for j in jobs):
         note += " Naukri listings without a verifiable date are included separately and are not counted as fresh."
-    if "naukri" in source_diagnostics and source_diagnostics["naukri"]["displayed_jobs"] < NAUKRI_SCAN_TARGET_MIN:
-        shown = source_diagnostics["naukri"]["displayed_jobs"]
-        note += f" Naukri target is {NAUKRI_SCAN_TARGET_MIN}–{NAUKRI_SCAN_TARGET_MAX}; this search found only {shown} usable listing(s), so none were fabricated."
     note = f"{note}{qnote} {NAUKRI_BLOCKED_NOTE}"
     result = {
         "window_minutes": applied,

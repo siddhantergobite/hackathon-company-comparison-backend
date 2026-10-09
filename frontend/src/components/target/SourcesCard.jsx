@@ -6,7 +6,7 @@ export default function SourcesCard({ citations }) {
   if (!citations.length) return null;
   return (
     <Card id="sources" style={{ scrollMarginTop: 90 }}>
-      <CardHeader icon={Link2} title="Sources & verified references" />
+      <CardHeader icon={Link2} title="Source references" />
       {citations.map((c, i) => {
         const href = citeHref(c);
         return (
@@ -18,6 +18,9 @@ export default function SourcesCard({ citations }) {
               </a>
               <div className="citation-item__meta">
                 {c.domain || href}
+                <span className={`cite-badge ${c.retrieved ? 'cite-badge--high' : 'cite-badge--medium'}`}>
+                  {c.retrieved ? 'Page fetched' : 'URL found; page not fetched'}
+                </span>
                 {c.category ? ` · ${c.category}` : ''}
               </div>
             </div>

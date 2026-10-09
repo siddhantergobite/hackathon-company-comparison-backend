@@ -45,7 +45,7 @@ export function SourcesBar({ citations, count }) {
       <a href="#sources" className="text-sm" style={{ fontWeight: 600 }}>
         {count} source{count !== 1 ? 's' : ''}
       </a>
-      <span className="text-sm muted">Every fact is traced to a public source.</span>
+      <span className="text-sm muted">Source links distinguish pages fetched from URLs discovered but not fetched.</span>
     </div>
   );
 }
