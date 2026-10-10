@@ -8,6 +8,17 @@ const CasefileContext = createContext(null);
 const STORAGE_KEY = 'casefile:session:v1';
 const EMPTY = { brochure: null, target: null, targetUrl: '', pitch: null, aeo: null, outreachLog: [] };
 
+function targetRequestKey(value) {
+  try {
+    const parsed = new URL(value, window.location.origin);
+    parsed.hash = '';
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+    return `${parsed.protocol}//${parsed.host.toLowerCase()}${parsed.pathname}${parsed.search}`;
+  } catch {
+    return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+  }
+}
+
 function loadSession() {
   try {
     // A browser refresh starts a new casefile. Do not restore old brochure,
@@ -38,6 +49,7 @@ export function CasefileProvider({ children }) {
   const dataRef = useRef(data);
   const inFlight = useRef(new Set());
   const targetRequestId = useRef(0);
+  const targetInFlight = useRef(null);
 
   useEffect(() => {
     dataRef.current = data;
@@ -50,14 +62,15 @@ export function CasefileProvider({ children }) {
     async (key, work) => {
       if (inFlight.current.has(key)) return false;
       inFlight.current.add(key);
-      setRequests((r) => ({ ...r, [key]: { loading: true, error: null } }));
+      const startedAt = Date.now();
+      setRequests((r) => ({ ...r, [key]: { loading: true, error: null, startedAt } }));
       try {
         await work();
-        setRequests((r) => ({ ...r, [key]: { loading: false, error: null } }));
+        setRequests((r) => ({ ...r, [key]: { loading: false, error: null, startedAt: null } }));
         return true;
       } catch (e) {
         const message = e?.message || 'Something went wrong';
-        setRequests((r) => ({ ...r, [key]: { loading: false, error: message } }));
+        setRequests((r) => ({ ...r, [key]: { loading: false, error: message, startedAt: null } }));
         toast.error(message);
         return false;
       } finally {
@@ -77,7 +90,11 @@ export function CasefileProvider({ children }) {
 
       setTargetUrl: (url) => setData((d) => ({ ...d, targetUrl: url })),
 
-      researchTarget: async (url) => {
+      researchTarget: (url) => {
+        const key = targetRequestKey(url);
+        const current = targetInFlight.current;
+        if (current?.key === key) return current.promise;
+
         const requestId = ++targetRequestId.current;
         const startedAt = Date.now();
 
@@ -86,29 +103,39 @@ export function CasefileProvider({ children }) {
         // research is running or after the new request fails.
         setData((d) => ({ ...d, target: null, targetUrl: url, pitch: null, aeo: null, outreachLog: [] }));
         setRequests((r) => ({ ...r, target: { loading: true, error: null, startedAt, requestedUrl: url } }));
-        try {
-          const report = await api.companyResearch(url);
-          if (requestId !== targetRequestId.current) return false;
-          setSlice('target', report);
-          setRequests((r) => ({ ...r, target: { loading: false, error: null, startedAt: null, requestedUrl: null } }));
-          return true;
-        } catch (e) {
-          if (requestId !== targetRequestId.current) return false;
-          const message = e?.message || 'Something went wrong';
-          setRequests((r) => ({ ...r, target: { loading: false, error: message, startedAt: null, requestedUrl: null } }));
-          toast.error(message);
-          return false;
-        } finally {
-          if (requestId === targetRequestId.current) {
-            setRequests((r) => ({ ...r, target: { ...r.target, loading: false, startedAt: null, requestedUrl: null } }));
+        const promise = (async () => {
+          try {
+            const report = await api.companyResearch(url);
+            if (requestId !== targetRequestId.current) return false;
+            setSlice('target', report);
+            setRequests((r) => ({ ...r, target: { loading: false, error: null, startedAt: null, requestedUrl: null } }));
+            return true;
+          } catch (e) {
+            if (requestId !== targetRequestId.current) return false;
+            const message = e?.message || 'Something went wrong';
+            setRequests((r) => ({ ...r, target: { loading: false, error: message, startedAt: null, requestedUrl: null } }));
+            toast.error(message);
+            return false;
+          } finally {
+            if (requestId === targetRequestId.current) {
+              setRequests((r) => ({ ...r, target: { ...r.target, loading: false, startedAt: null, requestedUrl: null } }));
+            }
           }
-        }
+        })();
+        const entry = { key, promise };
+        targetInFlight.current = entry;
+        const clearEntry = () => {
+          if (targetInFlight.current === entry) targetInFlight.current = null;
+        };
+        promise.then(clearEntry, clearEntry);
+        return promise;
       },
 
       clearTargetResearch: () => {
         // Editing the target to a different company invalidates the old report
         // so it cannot be mistaken for results for the newly entered URL.
         targetRequestId.current += 1;
+        targetInFlight.current = null;
         setData((d) => ({ ...d, target: null, pitch: null, aeo: null, outreachLog: [] }));
         setRequests((r) => ({ ...r, target: { loading: false, error: null, startedAt: null, requestedUrl: null } }));
       },
@@ -140,6 +167,7 @@ export function CasefileProvider({ children }) {
 
       resetCasefile: () => {
         targetRequestId.current += 1;
+        targetInFlight.current = null;
         setData(EMPTY);
       },
     }),

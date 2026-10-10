@@ -11,7 +11,7 @@ Phase 5 — REPORT    : Structured deep intelligence JSON
 import os, re, json, time, ipaddress, socket
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from threading import BoundedSemaphore, Lock
 from typing import Any
 from urllib.parse import urlparse, urljoin
 import requests
@@ -46,7 +46,9 @@ RESEARCH_FAST = not RESEARCH_DEEP
 # The report judge remains enabled by default. Set the skip flag only when a
 # deliberately faster, less-validated response is needed.
 RESEARCH_SKIP_JUDGE = _env_flag("RESEARCH_SKIP_JUDGE", False)
-RESEARCH_SKIP_HIRING_SEARCH = _env_flag("RESEARCH_SKIP_HIRING_SEARCH", False)
+# Interactive mode limits hiring discovery to the core public sources; the
+# broader eight-query sweep remains available with RESEARCH_DEEP=1.
+RESEARCH_SKIP_HIRING_SEARCH = _env_flag("RESEARCH_SKIP_HIRING_SEARCH", RESEARCH_FAST)
 # Model-assisted gap-fill for leadership, company identity, and contacts when
 # the site scrape finds nothing. Every retained fact gets a visible status.
 RESEARCH_LLM_ENRICH = _env_flag("RESEARCH_LLM_ENRICH", True)
@@ -62,6 +64,9 @@ PROFILE_JUDGE_TIMEOUT = 30.0 if RESEARCH_FAST else 90.0
 HIRING_LLM_TIMEOUT = 20.0 if RESEARCH_FAST else 50.0
 HIRING_JUDGE_TIMEOUT = 20.0 if RESEARCH_FAST else 45.0
 CONCLUSION_LLM_TIMEOUT = 10.0 if RESEARCH_FAST else 35.0
+# Keep free public search within a modest concurrency budget. A burst of many
+# simultaneous DuckDuckGo requests is more likely to be throttled than faster.
+_DDG_SEARCH_SEMAPHORE = BoundedSemaphore(3)
 
 # ZaubaCorp / Indian MCA / CIN — fully OFF (user requested remove CIN completely).
 # Research uses website + global public web only (pre-CIN behavior).
@@ -219,6 +224,9 @@ def _anchor_company_name(candidate: str, domain: str, scraped: dict | None = Non
     )
     if blocked:
         return brand
+    site_title = re.split(r"[|\-:]", str(scraped.get("title") or ""))[0].strip()
+    if _name_matches_domain(site_title, domain):
+        return site_title
     if _name_matches_domain(candidate, domain):
         return candidate or brand
     return brand
@@ -1890,14 +1898,16 @@ def _scrape_contact_page(origin: str, raw_html: str = "", homepage_soup=None,
 
     def _fetch_contact(target: str):
         try:
-            resp = requests.get(target, headers=HEADERS, timeout=5, allow_redirects=True)
-            if resp.status_code != 200 or len(resp.text) <= 500:
+            fetched = _fetch_public_profile_page(target, timeout=5)
+            html = str(fetched.get("html") or "")
+            final_url = str(fetched.get("url") or target)
+            if len(html) <= 500:
                 return target, None
             # /contact often 302s to an unrelated marketing page — drop those
-            if not _redirect_ok(target, str(resp.url or target), "contact_text"):
-                print(f"[Contact] Ignored off-target redirect {target} -> {resp.url}")
+            if not _redirect_ok(target, final_url, "contact_text"):
+                print(f"[Contact] Ignored off-target redirect {target} -> {final_url}")
                 return target, None
-            return str(resp.url or target), resp.text
+            return final_url, html
         except Exception:
             pass
         return target, None
@@ -1981,13 +1991,14 @@ def _fetch_page_full(url: str, timeout: int = 15) -> dict:
     out = {"text": "", "lines": "", "final_url": url, "status": 0, "html": ""}
     try:
         from bs4 import BeautifulSoup
-        resp = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
-        out["status"] = resp.status_code
-        out["final_url"] = str(resp.url or url)
-        if resp.status_code != 200:
+        fetched = _fetch_public_profile_page(url, timeout=min(max(int(timeout), 2), 16))
+        html = str(fetched.get("html") or "")
+        if not html:
             return out
-        out["html"] = resp.text
-        soup = BeautifulSoup(resp.text, "html.parser")
+        out["status"] = 200
+        out["final_url"] = str(fetched.get("url") or url)
+        out["html"] = html
+        soup = BeautifulSoup(html, "html.parser")
         for tag in soup(["script", "style", "noscript", "svg", "iframe"]):
             tag.decompose()
         # Keep block boundaries: team cards render as "Name\nRole" with no separator char
@@ -2126,19 +2137,15 @@ def _scrape_website(url: str, include_wiki: bool = False) -> dict:
     # ── Homepage ──────────────────────────────────────────────────────
     try:
         home_timeout = 8
-        resp = requests.get(url, headers=HEADERS, timeout=home_timeout, allow_redirects=True)
-        if resp.status_code == 403:
-            # Some enterprise sites block datacenter UAs — retry with alternate UA
-            alt = dict(HEADERS)
-            alt["User-Agent"] = (
-                "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
-            )
-            resp = requests.get(url, headers=alt, timeout=home_timeout, allow_redirects=True)
+        resp = _fetch_public_profile_page(url, timeout=home_timeout)
+        homepage_html = str(resp.get("html") or "")
+        if not homepage_html:
+            raise ValueError("The public homepage could not be fetched")
         result["_homepage_reachable"] = True
-        result["_homepage_status"] = resp.status_code
-        resp.raise_for_status()
-        _homepage_raw = resp.text
-        soup = BeautifulSoup(resp.text, "html.parser")
+        result["_homepage_status"] = 200
+        result["_homepage_final_url"] = str(resp.get("url") or url)
+        _homepage_raw = homepage_html
+        soup = BeautifulSoup(homepage_html, "html.parser")
 
         result["title"] = (soup.title.string or "").strip()
         for tag in soup.find_all("meta"):
@@ -2178,10 +2185,10 @@ def _scrape_website(url: str, include_wiki: bool = False) -> dict:
 
         # Emails & phones (quick pass from raw HTML before footer is removed)
         email_pat = r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
-        result["emails"] = _find_emails(resp.text)[:10]
+        result["emails"] = _find_emails(homepage_html)[:10]
 
         # Clean homepage body text for LLM (footer removed here only for body_text)
-        soup_body = BeautifulSoup(resp.text, "html.parser")
+        soup_body = BeautifulSoup(homepage_html, "html.parser")
         for tag in soup_body(["script","style","nav","footer","header","noscript"]):
             tag.decompose()
         home_lines = re.sub(r"[ \t\xa0]+", " ", soup_body.get_text(separator="\n", strip=True))
@@ -2338,15 +2345,85 @@ def _scrape_website(url: str, include_wiki: bool = False) -> dict:
 
 def _ddg_search(query: str, max_results: int = 8) -> list:
     try:
+        from ddgs import DDGS
+        backends = ("duckduckgo", "yahoo") if RESEARCH_FAST else ("duckduckgo", "yahoo", "auto")
+        supports_backend = True
+    except ImportError:
         try:
-            from ddgs import DDGS
-        except ImportError:
             from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
-    except Exception as e:
-        print(f"[Research] DDG failed for '{query}': {e}")
-        return []
+            backends = ("auto",)
+            supports_backend = False
+        except ImportError as exc:
+            print(f"[Research] Public search package unavailable ({type(exc).__name__})")
+            return []
+
+    failures = []
+    for backend in backends:
+        try:
+            with _DDG_SEARCH_SEMAPHORE:
+                try:
+                    client = DDGS(timeout=3 if RESEARCH_FAST else 5)
+                except TypeError:  # older duckduckgo_search versions
+                    client = DDGS()
+                with client as ddgs:
+                    try:
+                        rows = ddgs.text(
+                            query,
+                            max_results=max_results,
+                            **({"backend": backend} if supports_backend else {}),
+                        )
+                    except TypeError:
+                        # Preserve compatibility with older versions that don't
+                        # accept a backend selector on text().
+                        rows = ddgs.text(query, max_results=max_results)
+            if rows:
+                return list(rows)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(type(exc).__name__)
+    if failures:
+        print(f"[Research] Public search backends failed for '{query}' ({','.join(failures[:3])})")
+    return []
+
+
+def _research_web_search(query: str, max_results: int = 5) -> list[dict]:
+    """Use an explicitly configured research search API, otherwise free DDG."""
+    api_key = os.getenv("RESEARCH_SERPAPI_KEY", "").strip()
+    if api_key:
+        try:
+            response = requests.get(
+                "https://serpapi.com/search.json",
+                params={
+                    "engine": "google",
+                    "q": query,
+                    "api_key": api_key,
+                    "num": max(1, min(int(max_results), 10)),
+                },
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            rows = []
+            for item in payload.get("organic_results") or []:
+                href = str(item.get("link") or "").strip()
+                if not href:
+                    continue
+                rows.append({
+                    "title": item.get("title") or "",
+                    "href": href,
+                    "body": item.get("snippet") or "",
+                    "published_at": item.get("date") or "",
+                })
+                if len(rows) >= max(1, min(int(max_results), 10)):
+                    break
+            return rows
+        except Exception as exc:  # noqa: BLE001
+            # Exception strings from HTTP clients can include request URLs and
+            # query parameters; do not write credentials into application logs.
+            print(
+                "[Research] Configured search provider failed; falling back to DDG "
+                f"({type(exc).__name__})"
+            )
+    return _ddg_search(query, max_results=max_results)
 
 
 def _ddg_news_search(query: str, max_results: int = 4) -> list:
@@ -3164,6 +3241,7 @@ def _public_contact_evidence(
         source: str = "Public web",
         *,
         retrieved: bool = True,
+        published_at: str = "",
     ) -> None:
         href = str(href or "").strip()
         if not href.startswith(("http://", "https://")):
@@ -3558,6 +3636,81 @@ def _build_site_evidence_blob(company_name: str, domain: str, scraped: dict) -> 
     return "\n".join(p for p in parts if p and str(p).strip())[:7000]
 
 
+def _fetch_public_profile_page(url: str, timeout: int = 4) -> dict:
+    """Fetch one bounded public HTML page; reject private IPs and unsafe redirects."""
+    current = str(url or "").strip()
+    for _ in range(4):
+        parsed = urlparse(current)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not host
+            or parsed.username
+            or parsed.password
+            or host in {"localhost", "localhost.localdomain"}
+            or host.endswith((".local", ".internal"))
+        ):
+            return {}
+        try:
+            address = ipaddress.ip_address(host)
+            addresses = [address]
+        except ValueError:
+            try:
+                addresses = [
+                    ipaddress.ip_address(row[4][0])
+                    for row in socket.getaddrinfo(
+                        host, parsed.port or (443 if parsed.scheme == "https" else 80)
+                    )
+                ]
+            except (OSError, ValueError):
+                return {}
+        if not addresses or any(not address.is_global for address in addresses):
+            return {}
+
+        try:
+            with requests.get(
+                current, headers=HEADERS, timeout=timeout,
+                allow_redirects=False, stream=True,
+            ) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("Location") or ""
+                    if not location:
+                        return {}
+                    current = urljoin(current, location)
+                    continue
+                if response.status_code != 200:
+                    return {}
+                content_type = str(response.headers.get("Content-Type") or "").lower()
+                if content_type and not any(
+                    marker in content_type for marker in ("text/html", "application/xhtml")
+                ):
+                    return {}
+                chunks, total = [], 0
+                for chunk in response.iter_content(chunk_size=16384):
+                    if not chunk:
+                        continue
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= 1_200_000:
+                        break
+                encoding = response.encoding or "utf-8"
+                html = b"".join(chunks)[:1_200_000].decode(encoding, errors="replace")
+        except Exception:
+            return {}
+
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+            title = soup.title.get_text(" ", strip=True) if soup.title else ""
+            for tag in soup(["script", "style", "noscript", "svg", "iframe"]):
+                tag.decompose()
+            text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))[:4200]
+        except Exception:
+            return {}
+        return {"url": current, "title": title[:180], "text": text, "html": html}
+    return {}
+
+
 def _ai_profile_evidence(
     company_name: str,
     domain: str,
@@ -3574,6 +3727,13 @@ def _ai_profile_evidence(
     intel = intel or {}
     records: list[dict] = []
     seen: set[str] = set()
+    industry_label = str(_industry_context(scraped, intel).get("label") or "general")
+    industry_query = {
+        "music_entertainment": "music",
+        "professional_services": "professional services",
+        "travel_tourism": "travel",
+        "healthcare": "pharma",
+    }.get(industry_label, industry_label.replace("_", " ") if industry_label != "general" else "")
     blocked = ("chatgpt.com", "chat.openai.com", "openai.com/chat", "accounts.google", "login.microsoftonline")
 
     def _same_company(href: str) -> bool:
@@ -3584,6 +3744,52 @@ def _ai_profile_evidence(
         base = (domain or "").lower().replace("www.", "")
         return bool(base and (host == base or host.endswith("." + base)))
 
+    def _matches_market_industry(text: str) -> bool:
+        industry_patterns = {
+            "healthcare": r"\bhealth[\s-]?care\b|pharma(?:ceutical)?s?|life sciences|biotech|clinical|medical|active pharmaceutical ingredients|biosimilars|generic drugs",
+            "travel_tourism": r"travel|tourism|hospitality|trip planning|vacation|airline",
+            "music_entertainment": r"music|entertainment|streaming|record label|film",
+            "software": r"software|technology|cloud|saas|artificial intelligence|\bAI\b|cybersecurity",
+            "manufacturing": r"manufactur(?:ing|er)|industrial|factory|supply chain|production",
+            "engineering": r"engineering|construction|infrastructure|\bEPC\b|civil",
+            "professional_services": r"professional services|consulting|advisory|accounting|legal services",
+            "ecommerce": r"e-commerce|ecommerce|retail|marketplace|online shopping",
+            "education": r"education|learning|university|school|training|edtech",
+            "logistics": r"logistics|supply chain|freight|shipping|warehouse|courier",
+        }
+        pattern = industry_patterns.get(industry_label)
+        if not pattern and industry_query:
+            pattern = re.escape(industry_query)
+        return bool(pattern and re.search(pattern, str(text or ""), re.I))
+
+    def _leadership_excerpt(value: str, limit: int = 4200) -> str:
+        raw_lines = [re.sub(r"\s+", " ", line).strip() for line in str(value or "").splitlines()]
+        lines = [line for line in raw_lines if line]
+        role_pattern = re.compile(
+            r"(?i)\b(?:chief executive|\bceo\b|chief technology|\bcto\b|chief financial|\bcfo\b|"
+            r"chief operating|\bcoo\b|managing director|vice chairman|chairman|chairperson|"
+            r"president|founder|co-founder|director|executive director)\b"
+        )
+        nav_only = {"board of directors", "management", "leadership", "our team", "team"}
+        selected: set[int] = set()
+        hits = [
+            index for index, line in enumerate(lines)
+            if line.lower() not in nav_only and role_pattern.search(line)
+        ]
+        for index in hits[:28]:
+            selected.update(range(max(0, index - 1), min(len(lines), index + 2)))
+        if not selected:
+            return "\n".join(lines)[:limit]
+        excerpt = []
+        size = 0
+        for index in sorted(selected):
+            line = lines[index]
+            if size + len(line) + 1 > limit:
+                break
+            excerpt.append(line)
+            size += len(line) + 1
+        return "\n".join(excerpt)
+
     def _add(
         href: str,
         title: str,
@@ -3591,6 +3797,8 @@ def _ai_profile_evidence(
         source: str = "Public web",
         *,
         retrieved: bool = True,
+        published_at: str = "",
+        search_snippet: str = "",
     ) -> None:
         href = str(href or "").strip()
         if not href.startswith(("http://", "https://")) or any(x in href.lower() for x in blocked):
@@ -3601,7 +3809,9 @@ def _ai_profile_evidence(
         snippet = re.sub(r"\s+", " ", str(snippet or "")).strip()
         if not title and not snippet:
             return
-        if not _same_company(href) and not _blob_matches_brand(f"{title} {snippet}", company_name, domain):
+        exact_brand_match = _blob_matches_brand(f"{title} {snippet}", company_name, domain)
+        market_trend_match = source == "Market Trends & Risk" and _matches_market_industry(f"{title} {snippet}")
+        if not _same_company(href) and not exact_brand_match and not market_trend_match:
             return
         key = href.rstrip("/").lower()
         if key in seen:
@@ -3613,6 +3823,8 @@ def _ai_profile_evidence(
             "snippet": snippet[:1000],
             "source": (source or auth.classify_source(href, domain))[:100],
             "retrieved": bool(retrieved),
+            "published_at": str(published_at or "")[:32],
+            "search_snippet": str(search_snippet or (snippet if not retrieved else ""))[:1000],
         })
 
     structured = scraped.get("_structured") or {}
@@ -3625,7 +3837,10 @@ def _ai_profile_evidence(
     ):
         text_value = structured.get(key) or scraped.get(key) or ""
         if text_value:
-            _add(page_urls.get(key) or f"https://{domain}/", label, text_value[:2600], "Company Website")
+            if key == "leadership_text":
+                text_value = _leadership_excerpt(text_value)
+            category = "Leadership" if key == "leadership_text" else "Company Website"
+            _add(page_urls.get(key) or f"https://{domain}/", label, text_value[:4200], category)
 
     contact = scraped.get("contact_data") or {}
     contact_url = (contact.get("source_pages") or [f"https://{domain}/"])[0]
@@ -3670,34 +3885,39 @@ def _ai_profile_evidence(
             retrieved=page.get("retrieved") is not False and bool(page.get("text")),
         )
 
-    queries = [
-        f'"{company_name}" competitors',
-        f'"{company_name}" alternatives',
-        f'"{company_name}" products services customers',
-        f'"{company_name}" market position operating regions',
-        f'"{company_name}" CEO OR founder OR leadership',
-        f'"{company_name}" CTO OR management OR executives',
-        f'"{company_name}" "point of contact" OR email OR phone',
-        f'"{company_name}" headquarters OR "head office" OR founded',
-        f'site:linkedin.com/company "{company_name}"',
-        f'site:linkedin.com/in "{company_name}" CEO OR CTO OR founder',
-        f'site:theorg.com "{company_name}"',
-        f'"{company_name}" current director OR president',
+    trend_query = (
+        f"{datetime.now().year} {industry_query} industry trends market outlook"
+        if industry_query else
+        f'"{company_name}" market outlook trends {datetime.now().year}'
+    )
+    query_specs = [
+        ("Competitors", f'"{company_name}" competitors peers alternatives market comparison'),
+        ("Competitors", f'"{company_name}" peer comparison competitors market'),
+        ("Products & Services", f'"{company_name}" products services customers'),
+        ("Market & Geography", f'"{company_name}" market position regions countries'),
+        ("Leadership", f'"{company_name}" current CEO founder leadership executives'),
+        ("Leadership", f'site:{domain} (leadership OR executive OR management OR founders OR CEO OR "about us")'),
+        ("Leadership", f'site:theorg.com/org "{company_name}" CEO founder leadership'),
+        ("Leadership", f'site:inc42.com/company "{company_name}" CEO founder leadership'),
+        ("Financials", f'"{company_name}" revenue employees annual report'),
+        ("Market Trends & Risk", trend_query),
+        ("Public Contacts", f'site:{domain} contact leadership email phone'),
     ]
     if not RESEARCH_DEEP:
-        # The bounded path reserves four queries for market/product evidence
-        # and four for leadership, contact, and company profile evidence.
-        queries = queries[:8]
+        # Keep one bounded parallel sweep while prioritizing the official site,
+        # peer evidence, an org chart source, and a dated industry outlook.
+        query_specs = [query_specs[index] for index in (0, 2, 3, 5, 8, 9)]
 
-    def _search(query: str) -> list:
+    def _search(spec: tuple[str, str]) -> list:
+        _, query = spec
         try:
-            return _ddg_search(query, max_results=5)
+            return _research_web_search(query, max_results=3)
         except Exception as exc:  # noqa: BLE001
             print(f"[Research] AI profile search failed for '{query}': {exc}")
             return []
 
-    with ThreadPoolExecutor(max_workers=min(6, len(queries))) as pool:
-        for query, query_rows in zip(queries, pool.map(_search, queries)):
+    with ThreadPoolExecutor(max_workers=min(3, len(query_specs))) as pool:
+        for (category, query), query_rows in zip(query_specs, pool.map(_search, query_specs)):
             for row in query_rows or []:
                 if not isinstance(row, dict):
                     continue
@@ -3706,12 +3926,222 @@ def _ai_profile_evidence(
                     href,
                     row.get("title") or "Public search result",
                     f"{row.get('body') or row.get('snippet') or ''} Search query: {query}",
-                    auth.classify_source(href, domain) if href else "Public Web",
+                    category or (auth.classify_source(href, domain) if href else "Public Web"),
                     retrieved=False,
+                    published_at=(
+                        row.get("published_at") or row.get("published") or row.get("date")
+                        or _search_result_date(row.get("body") or row.get("snippet") or "")
+                    ),
+                    search_snippet=(row.get("body") or row.get("snippet") or ""),
                 )
 
-    records.sort(key=lambda r: (0 if _same_company(r.get("url") or "") else 1, r.get("url") or ""))
-    return records[:40]
+    # Search results are useful for discovery, but the report judge needs readable
+    # source text. Fetch a small, diverse subset before the judge runs; all fetches
+    # are bounded and public-address checked, and failures remain ordinary misses.
+    already_fetched = {
+        _canonical_public_url(str(page.get("url") or ""))
+        for page in (intel.get("_scraped_pages") or [])
+        if isinstance(page, dict) and page.get("url")
+    }
+    already_fetched.update(
+        _canonical_public_url(str(value or ""))
+        for value in page_urls.values()
+        if value
+    )
+    profile_fetch_limit = 6 if not RESEARCH_DEEP else 8
+    by_category = {}
+    for record in records:
+        category = str(record.get("source") or "Public Web")
+        by_category.setdefault(category, []).append(record)
+    fetch_candidates = []
+    preferred_categories = (
+        "Competitors", "Products & Services", "Leadership", "Market & Geography",
+        "Financials", "Market Trends & Risk", "Public Contacts",
+    )
+    for category in preferred_categories:
+        category_records = list(by_category.get(category, []))
+        if category == "Leadership":
+            leadership_terms = ("leadership", "key people", "founder", "ceo", "executive", "team", "about")
+            category_records.sort(
+                key=lambda row: -sum(
+                    term in str(row.get("title") or "").lower()
+                    for term in leadership_terms
+                )
+            )
+        category_limit = 2 if category in {"Leadership", "Competitors"} else 1
+        selected_for_category = 0
+        selected_hosts = set()
+        for record in category_records:
+            canonical = _canonical_public_url(record.get("url") or "")
+            host = (urlparse(str(record.get("url") or "")).hostname or "").lower().removeprefix("www.")
+            # LinkedIn commonly serves a sign-in shell to anonymous crawlers;
+            # keep its search snippet as a lead and fetch another source instead.
+            if host == "linkedin.com" or host.endswith(".linkedin.com"):
+                continue
+            if host in selected_hosts:
+                continue
+            if not canonical or canonical in already_fetched:
+                continue
+            fetch_candidates.append(record)
+            already_fetched.add(canonical)
+            selected_hosts.add(host)
+            selected_for_category += 1
+            if selected_for_category >= category_limit or len(fetch_candidates) >= profile_fetch_limit:
+                break
+        if len(fetch_candidates) >= profile_fetch_limit:
+            break
+    if len(fetch_candidates) < profile_fetch_limit:
+        for record in records:
+            canonical = _canonical_public_url(record.get("url") or "")
+            if not canonical or canonical in already_fetched:
+                continue
+            fetch_candidates.append(record)
+            already_fetched.add(canonical)
+            if len(fetch_candidates) >= profile_fetch_limit:
+                break
+
+    def _fetch_one(record: dict) -> tuple[dict, dict]:
+        return record, _fetch_public_profile_page(str(record.get("url") or ""))
+
+    if fetch_candidates:
+        with ThreadPoolExecutor(max_workers=min(6, len(fetch_candidates))) as pool:
+            for record, fetched in pool.map(_fetch_one, fetch_candidates):
+                search_excerpt = str(record.get("snippet") or "")[:1000]
+                text = str(fetched.get("text") or "")
+                title = str(fetched.get("title") or record.get("title") or "")
+                if record.get("source") == "Leadership" and fetched.get("html"):
+                    try:
+                        from bs4 import BeautifulSoup
+                        page_soup = BeautifulSoup(fetched["html"], "html.parser")
+                        for tag in page_soup(["script", "style", "noscript", "svg", "iframe"]):
+                            tag.decompose()
+                        leadership_lines = page_soup.get_text(separator="\n", strip=True)
+                        text = _leadership_excerpt(leadership_lines)
+                    except Exception:
+                        pass
+                page_evidence = f"{title} {text[:2500]}"
+                page_matches_company = _blob_matches_brand(page_evidence, company_name, domain)
+                page_matches_industry = (
+                    record.get("source") == "Market Trends & Risk"
+                    and _matches_market_industry(page_evidence)
+                )
+                if len(text) < 120 or not (page_matches_company or page_matches_industry):
+                    continue
+                if (
+                    _is_blocked_page_text(title, text)
+                    or _is_parked_page_text(title, text)
+                    or _is_illogical_text(text[:900])
+                ):
+                    # Login walls and generic site chrome are not fetched evidence.
+                    continue
+                final_url = str(fetched.get("url") or record.get("url") or "")
+                extracted_date = _news_date_from_html(fetched.get("html") or "")
+                if not extracted_date and _parse_public_news_date(record.get("published_at")):
+                    parsed_search_date = _parse_public_news_date(record.get("published_at"))
+                    extracted_date = parsed_search_date.strftime("%Y-%m-%d")
+                text_limit = 4200 if record.get("source") == "Leadership" else 2200
+                record.update({
+                    "url": final_url,
+                    "title": title[:180],
+                    "snippet": text[:text_limit],
+                    "page_text": text[:text_limit],
+                    "search_snippet": search_excerpt,
+                    "retrieved": True,
+                    "published_at": extracted_date or record.get("published_at") or _search_result_date(search_excerpt),
+                })
+
+    category_rank = {
+        "Competitors": 0,
+        "Products & Services": 1,
+        "Leadership": 2,
+        "Market & Geography": 3,
+        "Financials": 4,
+        "Market Trends & Risk": 5,
+        "Public Contacts": 6,
+    }
+    records.sort(key=lambda r: (
+        0 if _same_company(r.get("url") or "") else 1,
+        0 if r.get("retrieved") else 1,
+        category_rank.get(str(r.get("source") or ""), 7),
+        r.get("url") or "",
+    ))
+    return records[:40 if RESEARCH_DEEP else 24]
+
+
+def _merge_profile_evidence_into_intel(evidence: list[dict], intel: dict) -> None:
+    """Expose profile search/fetch evidence to synthesis, judging, and citations."""
+    source_rows = intel.setdefault("_source_urls", [])
+    pages = intel.setdefault("_scraped_pages", [])
+    existing_source_urls = {
+        _canonical_public_url(str(row.get("url") or ""))
+        for row in source_rows if isinstance(row, dict)
+    }
+    existing_page_urls = {
+        _canonical_public_url(str(row.get("url") or ""))
+        for row in pages if isinstance(row, dict)
+    }
+    profile_sources = []
+    profile_pages = []
+    seen_profile_sources = set()
+    seen_profile_pages = set()
+    for row in evidence or []:
+        if not isinstance(row, dict):
+            continue
+        href = str(row.get("url") or "").strip()
+        canonical = _canonical_public_url(href)
+        if not canonical:
+            continue
+        category = str(row.get("source") or "Public Web")[:80]
+        title = str(row.get("title") or "Public source")[:180]
+        page_text = str(row.get("page_text") or (row.get("snippet") if row.get("retrieved") else ""))[:4200]
+        search_excerpt = str(row.get("search_snippet") or (row.get("snippet") if not row.get("retrieved") else ""))[:1000]
+        text = page_text
+        if search_excerpt and search_excerpt not in text:
+            text = f"{text}\nSearch result excerpt: {search_excerpt}"[:4200]
+        published_at = str(row.get("published_at") or "")[:32]
+        if canonical not in existing_source_urls and canonical not in seen_profile_sources:
+            profile_sources.append({
+                "title": title,
+                "url": href,
+                "category": category,
+                "snippet": text[:700],
+                "retrieved": bool(row.get("retrieved")),
+                "published_at": published_at,
+                "search_snippet": search_excerpt,
+            })
+            seen_profile_sources.add(canonical)
+        if (
+            row.get("retrieved") and text
+            and canonical not in existing_page_urls
+            and canonical not in seen_profile_pages
+        ):
+            host = (urlparse(href).netloc or "").lower().removeprefix("www.")
+            profile_pages.append({
+                "title": title,
+                "url": href,
+                "domain": host,
+                "category": category,
+                "snippet": text[:700],
+                "text": page_text,
+                "search_snippet": search_excerpt,
+                "published_at": published_at,
+                "emails": [],
+                "phones": [],
+                "retrieved": True,
+            })
+            seen_profile_pages.add(canonical)
+    # Profile evidence is the targeted, category-labeled sweep. Put it first so
+    # compact prompts and judge context do not get crowded out by old generic hits.
+    intel["_source_urls"] = profile_sources + [
+        row for row in source_rows
+        if not isinstance(row, dict)
+        or _canonical_public_url(str(row.get("url") or "")) not in seen_profile_sources
+    ]
+    intel["_scraped_pages"] = profile_pages + [
+        row for row in pages
+        if not isinstance(row, dict)
+        or _canonical_public_url(str(row.get("url") or "")) not in seen_profile_pages
+    ]
 
 
 def _run_ai_profile_fallback(
@@ -3721,19 +4151,14 @@ def _run_ai_profile_fallback(
     scraped: dict,
     intel: dict,
 ) -> dict:
-    """Fill missing profile facts, then attach judge metadata.
-
-    Model-knowledge facts are deliberately not disguised as website facts.  A
-    user can see them, but the UI receives the verification status and score so
-    outreach decisions remain reviewable.
-    """
+    """Fill missing profile facts from retrieved public evidence and judge them."""
     from backend.services import llm_judge
 
     base_result = {
         "status": "unavailable",
-        "provider": "AI public-knowledge profile + LLM judge",
+        "provider": "Public web profile research + fact judge",
         "judge_score": 0,
-        "summary": "AI profile enrichment was not available.",
+        "summary": "Public profile research was not available.",
         "evidence_count": 0,
         "source_urls": [],
         "leaders_added": 0,
@@ -3745,8 +4170,15 @@ def _run_ai_profile_fallback(
         report["ai_enrichment"] = base_result
         return report
 
-    evidence = _ai_profile_evidence(company_name, domain, scraped, intel)
+    evidence = intel.get("_profile_evidence")
+    if not isinstance(evidence, list):
+        evidence = _ai_profile_evidence(company_name, domain, scraped, intel)
     base_result["evidence_count"] = len(evidence)
+    if not evidence:
+        base_result["status"] = "complete_no_new_facts"
+        base_result["summary"] = "No additional accessible public-source evidence was retrieved."
+        report["ai_enrichment"] = base_result
+        return report
     existing = [
         {"name": l.get("name"), "role": l.get("role"), "status": l.get("status")}
         for l in (report.get("leadership_team") or [])[:8]
@@ -3790,26 +4222,25 @@ PUBLIC EVIDENCE (snippets and URLs):
 
 Return ONLY JSON:
 {{
-  "leadership": [{{"name":"Full Name","role":"CEO|CTO|CFO|COO|Founder|Co-founder|Chairperson|President|Managing Director|Director","status":"current|historical","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}}],
-  "point_of_contact": {{"name":"","title":"","email":"","phone":"","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}},
+  "leadership": [{{"name":"Full Name","role":"CEO|CTO|CFO|COO|Founder|Co-founder|Chairperson|President|Managing Director|Director","status":"current|historical","basis":"evidence","confidence":"High|Medium|Low"}}],
+  "point_of_contact": {{"name":"","title":"","email":"","phone":"","basis":"evidence","confidence":"High|Medium|Low"}},
   "headquarters": "city, country or empty",
   "founded": "YYYY or empty",
   "business_profile": {{
-    "products_services": [{{"item":"...","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}}],
-    "market_position": {{"value":"...","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}},
-    "geographic_reach": {{"value":"...","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}},
-    "competitor_candidates": [{{"name":"...","official_domain":"... or empty","market_location":"... or empty","overlap_reason":"...","basis":"evidence|model_knowledge","confidence":"High|Medium|Low"}}]
+    "products_services": [{{"item":"...","basis":"evidence","confidence":"High|Medium|Low"}}],
+    "market_position": {{"value":"...","basis":"evidence","confidence":"High|Medium|Low"}},
+    "geographic_reach": {{"value":"...","basis":"evidence","confidence":"High|Medium|Low"}},
+    "competitor_candidates": [{{"name":"...","official_domain":"... or empty","market_location":"... or empty","overlap_reason":"...","basis":"evidence","confidence":"High|Medium|Low"}}]
   }}
 }}
 
 Rules:
 - Prefer current CEO, CTO, COO, CFO, President, Chair, Founder/Co-founder, or MD.
-- You may use well-known public knowledge for a current leader if crawling did not expose the name,
-  but set basis=model_knowledge. Never pretend that is a website citation.
+- Use only the supplied public evidence. If a current leader is not supported there, leave that person out.
 - Historical founders must be status=historical and must not be the POC unless still operating.
 - Never invent an email or phone. Only copy exact values visible in PUBLIC EVIDENCE.
 - Never use private data, guessed email patterns, or a similarly named company.
-- For products, market position, reach, and competitors, separate retrieved evidence from model knowledge; model-knowledge results are suggestions, not verified facts.
+- For products, market position, reach, and competitors, use only claims supported by the supplied public evidence and return their exact source URLs.
 - Competitor candidates must overlap in business domain and actual operating market; do not fill a quota. Leave official_domain empty unless known with confidence.
 - Do not use model memory for latest news, current hiring, revenue/funding numbers, email addresses, or phone numbers. Those require current public evidence.
 - Empty is correct when the identity is not unambiguous.
@@ -3865,12 +4296,19 @@ Rules:
         if isinstance(item, dict) and str(item.get("url") or "").strip().startswith(("http://", "https://"))
     }
 
-    def _ai_status_source(status: str) -> str:
-        if status == "evidence-verified":
-            return "Public evidence + AI judge"
-        if status == "search-snippet-supported":
-            return "Search snippet only; page not fetched"
-        return "AI knowledge suggestion - unverified"
+    def _source_supported(status: str, urls: list[str]) -> bool:
+        return status in {"evidence-verified", "search-snippet-supported"} and any(
+            url in profile_evidence_urls for url in urls
+        )
+
+    def _ai_status_source(status: str, urls: list[str] | None = None) -> str:
+        for source_url in urls or []:
+            if source_url not in profile_evidence_urls:
+                continue
+            host = (urlparse(source_url).netloc or "").lower().removeprefix("www.")
+            if host:
+                return f"{host} search result" if status == "search-snippet-supported" else host
+        return "Public source"
 
     for row in verdict.get("leadership") or []:
         if not isinstance(row, dict) or not row.get("name"):
@@ -3878,11 +4316,13 @@ Rules:
         name = row.get("name")
         key = str(name).strip().lower()
         urls = [u for u in (row.get("source_urls") or []) if isinstance(u, str) and u]
+        status = row.get("verification_status") or "model-knowledge-reviewed"
+        if not _source_supported(status, urls):
+            continue
         accepted_source_urls.extend(urls)
         if key in existing_keys:
             continue
-        status = row.get("verification_status") or "model-knowledge-reviewed"
-        source = _ai_status_source(status)
+        source = _ai_status_source(status, urls)
         existing_rows.append({
             "name": str(name).strip(),
             "role": str(row.get("role") or "Leadership").strip(),
@@ -3909,6 +4349,13 @@ Rules:
 
     ai_poc = verdict.get("point_of_contact") if isinstance(verdict.get("point_of_contact"), dict) else {}
     ai_poc = dict(ai_poc or {})
+    ai_poc_urls = [
+        u for u in (ai_poc.get("source_urls") or [])
+        if isinstance(u, str) and u in profile_evidence_urls
+    ]
+    ai_poc_status = str(ai_poc.get("verification_status") or "model-knowledge-reviewed")
+    if not _source_supported(ai_poc_status, ai_poc_urls):
+        ai_poc = {}
     if not ai_poc and report.get("leadership_team"):
         for leader in report.get("leadership_team") or []:
             if leader.get("status") == "current" and re.search(
@@ -3924,6 +4371,16 @@ Rules:
                     "reason": "Selected from the highest-ranked current leader after AI judging.",
                 }
                 break
+
+    if ai_poc:
+        poc_urls = [
+            u for u in (ai_poc.get("source_urls") or [])
+            if isinstance(u, str) and u in profile_evidence_urls
+        ]
+        if not _source_supported(
+            str(ai_poc.get("verification_status") or "model-knowledge-reviewed"), poc_urls
+        ):
+            ai_poc = {}
 
     if ai_poc.get("name") or ai_poc.get("email") or ai_poc.get("phone"):
         # Keep a model-known executive separate from contact details. A public
@@ -3967,13 +4424,7 @@ Rules:
             row for row in phone_rows
             if poc_name and poc_name.lower() in " ".join((str(row.get("title") or ""), str(row.get("snippet") or ""))).lower()
         ]
-        ai_poc["source"] = (
-            "Public evidence + AI judge"
-            if poc_status == "evidence-verified"
-            else "Search snippet only; page not fetched"
-            if poc_status == "search-snippet-supported"
-            else "AI knowledge suggestion - unverified"
-        )
+        ai_poc["source"] = _ai_status_source(poc_status, ai_poc.get("source_urls") or [])
         ai_poc["verification_status"] = poc_status
         ai_poc["verified"] = poc_status == "evidence-verified" and name_in_evidence
         ai_poc["provenance"] = (
@@ -4004,7 +4455,7 @@ Rules:
                 "person_name": poc_name if email_is_named else "",
                 "title": ai_poc.get("title") or "" if email_is_named else "",
                 "label": (ai_poc.get("title") or "Public company email") if email_is_named else "Public company email",
-                "source": "Public evidence + AI judge" if email_status == "evidence-verified" else "Search snippet only; page not fetched",
+                "source": _ai_status_source(email_status, email_sources),
                 "source_urls": email_sources,
                 "confidence": ai_poc.get("confidence") or "Medium",
                 "verified": email_status == "evidence-verified",
@@ -4027,7 +4478,7 @@ Rules:
                 "person": poc_name if phone_is_named else "",
                 "person_name": poc_name if phone_is_named else "",
                 "label": (ai_poc.get("title") or "Public company phone") if phone_is_named else "Public company phone",
-                "source": "Public evidence + AI judge" if phone_status == "evidence-verified" else "Search snippet only; page not fetched",
+                "source": _ai_status_source(phone_status, phone_sources),
                 "source_urls": phone_sources,
                 "confidence": ai_poc.get("confidence") or "Medium",
                 "verified": phone_status == "evidence-verified",
@@ -4046,14 +4497,17 @@ Rules:
         if current and "not publicly" not in current.lower() and "not available" not in current.lower():
             continue
         status = fact.get("verification_status") or "model-knowledge-reviewed"
+        urls = [u for u in (fact.get("source_urls") or []) if isinstance(u, str) and u]
+        if not _source_supported(status, urls):
+            continue
         cp[key] = _field(
             fact["value"],
-            _ai_status_source(status),
+            _ai_status_source(status, urls),
             fact.get("confidence") or "Medium",
         )
         cp[key]["verification_status"] = status
-        cp[key]["source_urls"] = fact.get("source_urls") or []
-        accepted_source_urls.extend(fact.get("source_urls") or [])
+        cp[key]["source_urls"] = urls
+        accepted_source_urls.extend(urls)
     report["company_profile"] = cp
 
     # Fill only stable business-profile gaps. AI-knowledge-only values remain
@@ -4082,15 +4536,18 @@ Rules:
             if not item or item.lower() in existing_offering_keys:
                 continue
             status = row.get("verification_status") or "model-knowledge-reviewed"
-            source_label = _ai_status_source(status)
+            urls = [u for u in (row.get("source_urls") or []) if isinstance(u, str) and u]
+            if not _source_supported(status, urls):
+                continue
+            source_label = _ai_status_source(status, urls)
             filled_offerings.append({
                 "item": item,
                 "source": source_label,
                 "confidence": row.get("confidence") or "Medium",
                 "verification_status": status,
-                "source_urls": row.get("source_urls") or [],
+                "source_urls": urls,
             })
-            accepted_source_urls.extend(row.get("source_urls") or [])
+            accepted_source_urls.extend(urls)
             existing_offering_keys.add(item.lower())
         if len(filled_offerings) > len(current_offerings):
             ps["primary_offerings"] = filled_offerings[:8]
@@ -4110,15 +4567,18 @@ Rules:
         if not missing or not fact.get("value"):
             continue
         status = fact.get("verification_status") or "model-knowledge-reviewed"
+        urls = [u for u in (fact.get("source_urls") or []) if isinstance(u, str) and u]
+        if not _source_supported(status, urls):
+            continue
         ma[key] = _field(
             fact.get("value"),
-            _ai_status_source(status),
+            _ai_status_source(status, urls),
             fact.get("confidence") or "Medium",
         )
         ma[key]["verification_status"] = status
-        ma[key]["source_urls"] = fact.get("source_urls") or []
+        ma[key]["source_urls"] = urls
         ma[key]["reason"] = fact.get("reason") or "Reviewed by the AI profile judge"
-        accepted_source_urls.extend(fact.get("source_urls") or [])
+        accepted_source_urls.extend(urls)
         business_fields_added += 1
     report["market_analysis"] = ma
 
@@ -4127,10 +4587,7 @@ Rules:
         if not isinstance(row, dict) or not row.get("name"):
             continue
         status = str(row.get("verification_status") or "model-knowledge-reviewed")
-        urls = [
-            u for u in (row.get("source_urls") or [])
-            if isinstance(u, str) and u in profile_evidence_urls
-        ]
+        urls = [u for u in (row.get("source_urls") or []) if isinstance(u, str) and u in profile_evidence_urls]
         # Do not send model-memory-only names to the UI. Keep competitor leads
         # only when the profile judge tied the name to a retrieved public source.
         if status not in ("evidence-verified", "search-snippet-supported") or not urls:
@@ -4523,7 +4980,14 @@ Return ONLY JSON: {{"headquarters":"City, State, Country","confidence":"High|Med
     return {"headquarters": hq, "confidence": "Medium" if conf.lower() != "high" else "High", "urls": urls[:3]}
 
 
-def _collect_leadership(company_name: str, domain: str, scraped: dict, intel: dict) -> list:
+def _collect_leadership(
+    company_name: str,
+    domain: str,
+    scraped: dict,
+    intel: dict,
+    *,
+    search_public_web: bool = True,
+) -> list:
     """Gather leadership: Wikidata current execs first, then website/Wikipedia, then LLM gap-fill."""
     leaders = []
     wd = (intel or {}).get("_wikidata") or (scraped or {}).get("_wikidata") or {}
@@ -4560,7 +5024,7 @@ def _collect_leadership(company_name: str, domain: str, scraped: dict, intel: di
             ))
 
     # Public-web people search whenever the site did not name a sitting MD/CEO/Chair.
-    if not auth.has_operating_exec(leaders):
+    if search_public_web and not auth.has_operating_exec(leaders):
         queries = [
             f'"{company_name}" current "managing director" OR MD OR CEO OR chairman',
             f'"{company_name}" current CEO OR "chief executive"',
@@ -5012,7 +5476,7 @@ address={clip(contact.get('address'), 160)}
 Return ONLY compact JSON. IMPORTANT schema rules:
 - company_profile: object with name, website, description; founded/etc as {{value,source,confidence}}
 - products_services: {{"primary_offerings":[{{"item","source","confidence"}}], "pricing_model":{{...}}, "target_customers":{{...}}}}
-- market_analysis: {{"industry":{{...}},"market_position":{{...}},"geographic_reach":{{...}}}}
+- market_analysis: {{"industry":{{...}},"market_position":{{...}},"market_trends":{{"value":"...","source_url":"...","confidence":"..."}},"geographic_reach":{{...}}}}
 - swot_analysis: strengths/weaknesses/opportunities/threats as arrays of
   {{"point","source","confidence"}}. Include only supported observations or clearly labeled analysis; fewer than 3 is better than padding with generic claims.
 - competitors: up to 4 evidence-supported objects {{"name","description","official_domain","market_location","overlap_reason","evidence_url","threat_level","source","confidence"}}. Return fewer when the evidence does not establish a direct competitor in the same business domain and market.
@@ -5228,6 +5692,7 @@ def _looks_empty(section) -> bool:
 def _industry_context(scraped: dict, intel: dict) -> dict:
     """Detect industry label + peer set that works for ANY company type."""
     blob = " ".join([
+        scraped.get("title") or "",
         scraped.get("description") or "",
         scraped.get("homepage_text") or "",
         scraped.get("about_text") or "",
@@ -5235,6 +5700,17 @@ def _industry_context(scraped: dict, intel: dict) -> dict:
         intel.get("products") or "",
         intel.get("market_position") or "",
         intel.get("multi_source_digest") or "",
+    ]).lower()
+
+    # Prefer company identity and offering copy. Broad terms buried in long
+    # pages (e.g. "engineering" on a pharma careers page) should not override
+    # the actual business sector.
+    primary_blob = " ".join([
+        scraped.get("title") or "",
+        scraped.get("description") or "",
+        scraped.get("keywords") or "",
+        (scraped.get("products_text") or "")[:3000],
+        (scraped.get("about_text") or "")[:2500],
     ]).lower()
 
     # (label, keywords, peer list of (name, desc, threat))
@@ -5272,6 +5748,14 @@ def _industry_context(scraped: dict, intel: dict) -> dict:
              ("Fortis Healthcare", "Hospital / healthcare network", "High"),
              ("Dr. Reddy's", "Pharmaceutical company", "Medium"),
              ("Practo", "Digital health platform", "Medium"),
+         ]),
+        ("travel_tourism",
+         r"travel|tourism|trip planning|travel planner|itinerary|holiday packages|vacation booking",
+         [
+             ("Expedia Group", "Online travel booking and trip-planning services", "High"),
+             ("Booking Holdings", "Online travel booking platforms", "High"),
+             ("Tripadvisor", "Travel planning, reviews, and booking marketplace", "Medium"),
+             ("MakeMyTrip", "Online travel booking and holiday packages", "Medium"),
          ]),
         ("music_entertainment",
          r"music|record label|songs?|film music|audio|entertainment label|carvaan|gramophone|streaming music|music company",
@@ -5315,7 +5799,14 @@ def _industry_context(scraped: dict, intel: dict) -> dict:
              ("McKinsey", "Strategy consulting", "Medium"),
          ]),
     ]
+    specific_first = ("healthcare", "travel_tourism", "music_entertainment", "education", "logistics")
+    for preferred_label in specific_first:
+        for label, pattern, peers in catalogs:
+            if label == preferred_label and re.search(pattern, primary_blob):
+                return {"label": label, "peers": peers, "blob": blob}
     for label, pattern, peers in catalogs:
+        if label in specific_first:
+            continue
         if re.search(pattern, blob):
             return {"label": label, "peers": peers, "blob": blob}
 
@@ -5669,52 +6160,221 @@ def _apply_llm_judge(
     public_evidence = []
     allowed_evidence_urls = set()
     evidence_text_by_url = {}
+    evidence_page_text_by_url = {}
+    evidence_meta_by_url = {}
     if str(url).startswith(("http://", "https://")):
+        site_retrieved = bool(scraped.get("_homepage_reachable") and not scraped.get("_scrape_blocked"))
         allowed_evidence_urls.add(str(url).strip())
         evidence_text_by_url[str(url).strip()] = site_evidence
+        if site_retrieved:
+            evidence_page_text_by_url[str(url).strip()] = site_evidence
+        evidence_meta_by_url[str(url).strip()] = {
+            "category": "Company Website",
+            "title": company_name or domain,
+            "retrieved": site_retrieved,
+            "evidence_type": "page" if site_retrieved else "search_snippet",
+        }
         public_evidence.append({
             "url": str(url).strip(),
             "title": company_name or domain,
             "category": "Company Website",
-            "text": site_evidence[:850],
+            "text": site_evidence[:2600],
+            "retrieved": site_retrieved,
+            "evidence_type": "page" if site_retrieved else "search_snippet",
         })
         canonical_site_url = _canonical_public_url(str(url))
         if canonical_site_url:
             allowed_evidence_urls.add(canonical_site_url)
             evidence_text_by_url[canonical_site_url] = site_evidence
-    for page in (intel.get("_scraped_pages") or [])[:10]:
-        if not isinstance(page, dict):
-            continue
+            if site_retrieved:
+                evidence_page_text_by_url[canonical_site_url] = site_evidence
+            evidence_meta_by_url[canonical_site_url] = evidence_meta_by_url[str(url).strip()]
+    def _evidence_category_rank(value: Any) -> int:
+        category = str(value or "").lower()
+        for rank, markers in enumerate((
+            ("leadership",),
+            ("competitor",),
+            ("market trends", "trend"),
+            ("products", "services"),
+            ("market", "geography"),
+            ("financial", "revenue"),
+            ("news", "event"),
+        )):
+            if any(marker in category for marker in markers):
+                return rank
+        return 8
+
+    # Leadership was already fetched as part of the website crawl. Keep it as a
+    # separate, role-focused evidence row so a long homepage cannot truncate it
+    # before the judge sees the names and titles.
+    structured_site = scraped.get("_structured") or {}
+    site_page_urls = scraped.get("_page_urls") or {}
+    leadership_text = str(
+        structured_site.get("leadership_text") or scraped.get("leadership_text") or ""
+    ).strip()
+    leadership_url = str(
+        site_page_urls.get("leadership_text") or f"https://{domain}/"
+    ).strip()
+    if leadership_text and leadership_url.startswith(("http://", "https://")):
+        leadership_excerpt = leadership_text[:4200]
+        canonical_leadership_url = _canonical_public_url(leadership_url)
+        allowed_evidence_urls.update((leadership_url, canonical_leadership_url))
+        evidence_text_by_url[leadership_url] = leadership_excerpt
+        evidence_page_text_by_url[leadership_url] = leadership_excerpt
+        evidence_meta_by_url[leadership_url] = {
+            "category": "Leadership",
+            "title": "Company leadership page",
+            "retrieved": True,
+            "evidence_type": "page",
+        }
+        if canonical_leadership_url:
+            evidence_text_by_url[canonical_leadership_url] = leadership_excerpt
+            evidence_page_text_by_url[canonical_leadership_url] = leadership_excerpt
+            evidence_meta_by_url[canonical_leadership_url] = evidence_meta_by_url[leadership_url]
+        if not any(_canonical_public_url(str(row.get("url") or "")) == canonical_leadership_url for row in public_evidence):
+            public_evidence.append({
+                "url": leadership_url,
+                "title": "Company leadership page",
+                "category": "Leadership",
+                "text": leadership_excerpt,
+                "retrieved": True,
+                "evidence_type": "page",
+            })
+
+    candidate_pages = [
+        page for page in (intel.get("_scraped_pages") or [])
+        if isinstance(page, dict)
+    ]
+    candidate_pages.sort(key=lambda page: (
+        _evidence_category_rank(page.get("category")),
+        0 if page.get("retrieved") is not False and page.get("text") else 1,
+    ))
+    for page in candidate_pages[:10]:
         page_url = str(page.get("url") or "").strip()
         if not page_url.startswith(("http://", "https://")):
             continue
+        page_category = str(page.get("category") or "Public Web")
+        is_leadership_page = "leadership" in page_category.lower()
         allowed_evidence_urls.add(page_url)
-        page_text = str(page.get("text") or page.get("snippet") or "")[:850]
-        evidence_text_by_url[page_url] = page_text
+        page_text = str(page.get("text") or page.get("snippet") or "")[:
+            2400 if is_leadership_page else 700
+        ]
+        validation_text = f"{page.get('title') or ''} {page_text}"[:
+            4200 if is_leadership_page else 1100
+        ]
+        evidence_text_by_url[page_url] = validation_text
+        if page.get("retrieved") is not False and page.get("text"):
+            evidence_page_text_by_url[page_url] = validation_text
+        evidence_meta_by_url[page_url] = {
+            "category": page_category,
+            "title": str(page.get("title") or "Public source"),
+            "published_at": str(page.get("published_at") or ""),
+            "retrieved": page.get("retrieved") is not False and bool(page.get("text")),
+            "evidence_type": "page" if page.get("retrieved") is not False and page.get("text") else "search_snippet",
+        }
         canonical_page_url = _canonical_public_url(page_url)
         if canonical_page_url:
             allowed_evidence_urls.add(canonical_page_url)
-            evidence_text_by_url[canonical_page_url] = page_text
+            evidence_text_by_url[canonical_page_url] = validation_text
+            if page.get("retrieved") is not False and page.get("text"):
+                evidence_page_text_by_url[canonical_page_url] = validation_text
+            evidence_meta_by_url[canonical_page_url] = evidence_meta_by_url[page_url]
         public_evidence.append({
             "url": page_url,
             "title": page.get("title") or page.get("domain") or "Public source",
-            "category": page.get("category") or "Public Web",
+            "category": page_category,
             "text": page_text,
+            "published_at": page.get("published_at") or "",
+            "retrieved": page.get("retrieved") is not False and bool(page.get("text")),
+            "evidence_type": "page" if page.get("retrieved") is not False and page.get("text") else "search_snippet",
+            "search_result_excerpt": str(page.get("search_snippet") or "")[:1000],
         })
-    for row in (intel.get("_source_urls") or []):
-        if len(public_evidence) >= 12:
-            break
-        if not isinstance(row, dict):
-            continue
+    evidence_counts = {}
+    for item in public_evidence:
+        rank = _evidence_category_rank(item.get("category"))
+        evidence_counts[rank] = evidence_counts.get(rank, 0) + 1
+    source_rows = sorted(
+        (row for row in (intel.get("_source_urls") or []) if isinstance(row, dict)),
+        key=lambda row: (
+            _evidence_category_rank(row.get("category")),
+            0 if row.get("retrieved") else 1,
+        ),
+    )
+    for row in source_rows:
         source_url = str(row.get("url") or "").strip()
-        if not source_url.startswith(("http://", "https://")) or source_url in allowed_evidence_urls:
+        if not source_url.startswith(("http://", "https://")):
             continue
+        category = str(row.get("category") or "Public Web")
+        snippet_text = f"{row.get('title') or ''} {row.get('snippet') or ''}"[:720]
+        canonical_source_url = _canonical_public_url(source_url)
+        if source_url in allowed_evidence_urls or canonical_source_url in allowed_evidence_urls:
+            # The same URL can appear as both a fetched page and a search hit.
+            # Preserve the richer category/date metadata and exact snippet.
+            for evidence_url in (source_url, canonical_source_url):
+                if not evidence_url:
+                    continue
+                meta = evidence_meta_by_url.setdefault(evidence_url, {})
+                if _evidence_category_rank(category) < _evidence_category_rank(meta.get("category")):
+                    meta["category"] = category
+                if row.get("title") and not meta.get("title"):
+                    meta["title"] = str(row.get("title"))
+                if row.get("retrieved"):
+                    meta["retrieved"] = True
+                meta["evidence_type"] = "page" if meta.get("retrieved") else "search_snippet"
+                if row.get("search_snippet"):
+                    meta["search_snippet"] = str(row.get("search_snippet"))[:1000]
+                if row.get("retrieved") and evidence_url not in evidence_page_text_by_url and row.get("snippet"):
+                    evidence_page_text_by_url[evidence_url] = str(row.get("snippet"))[:4200]
+                if row.get("published_at") and not meta.get("published_at"):
+                    meta["published_at"] = str(row.get("published_at"))
+                prior_text = evidence_text_by_url.get(evidence_url, "")
+                if snippet_text and snippet_text not in prior_text:
+                    evidence_text_by_url[evidence_url] = f"{prior_text} {snippet_text}"[:4200]
+            existing_evidence = next(
+                (item for item in public_evidence if item.get("url") == source_url),
+                None,
+            )
+            if existing_evidence:
+                if _evidence_category_rank(category) < _evidence_category_rank(existing_evidence.get("category")):
+                    existing_evidence["category"] = category
+                if row.get("published_at") and not existing_evidence.get("published_at"):
+                    existing_evidence["published_at"] = row.get("published_at")
+                if row.get("search_snippet"):
+                    existing_evidence["search_result_excerpt"] = str(row.get("search_snippet"))[:1000]
+                if snippet_text and snippet_text not in str(existing_evidence.get("text") or ""):
+                    existing_evidence["text"] = f"{existing_evidence.get('text') or ''} {snippet_text}"[:2200]
+            continue
+        if len(public_evidence) >= 18:
+            continue
+        rank = _evidence_category_rank(category)
+        category_caps = {0: 4, 1: 4, 2: 3, 3: 2, 4: 2, 5: 2, 6: 2, 8: 2}
+        if evidence_counts.get(rank, 0) >= category_caps.get(rank, 2):
+            continue
+        allowed_evidence_urls.add(source_url)
+        evidence_text_by_url[source_url] = snippet_text
+        evidence_meta_by_url[source_url] = {
+            "category": category,
+            "title": str(row.get("title") or "Search result"),
+            "published_at": str(row.get("published_at") or ""),
+            "retrieved": bool(row.get("retrieved")),
+            "evidence_type": "page" if row.get("retrieved") else "search_snippet",
+            "search_snippet": str(row.get("search_snippet") or "")[:1000],
+        }
+        if canonical_source_url:
+            allowed_evidence_urls.add(canonical_source_url)
+            evidence_text_by_url[canonical_source_url] = snippet_text
+            evidence_meta_by_url[canonical_source_url] = evidence_meta_by_url[source_url]
         public_evidence.append({
             "url": source_url,
             "title": row.get("title") or "Search result",
-            "category": row.get("category") or "Public Web",
-            "text": f"Search-result snippet only; destination page not retrieved. {str(row.get('snippet') or '')[:500]}",
+            "category": category,
+            "text": snippet_text,
+            "published_at": row.get("published_at") or "",
+            "retrieved": bool(row.get("retrieved")),
+            "evidence_type": "page" if row.get("retrieved") else "search_snippet",
+            "search_result_excerpt": str(row.get("search_snippet") or "")[:1000],
         })
+        evidence_counts[rank] = evidence_counts.get(rank, 0) + 1
 
     verdict = llm_judge.judge_research_report(
         website_url=url,
@@ -5765,11 +6425,81 @@ def _apply_llm_judge(
             ma["market_position"] = _field("Not publicly available", "Judge", "Low")
             report["market_analysis"] = ma
 
-    # Competitors: require a supporting URL from retrieved/discovered public
-    # evidence. Do not pad the result with generic industry peers.
+    trend = verdict.get("market_trends") if isinstance(verdict.get("market_trends"), dict) else {}
+    trend_value = re.sub(r"\s+", " ", str(trend.get("value") or "")).strip()
+    trend_url = str(trend.get("source_url") or "").strip()
+    trend_canonical_url = _canonical_public_url(trend_url)
+    allowed_canonical_urls = {
+        _canonical_public_url(value) for value in allowed_evidence_urls
+        if _canonical_public_url(value)
+    }
+    trend_meta = evidence_meta_by_url.get(trend_url) or evidence_meta_by_url.get(trend_canonical_url) or {}
+    trend_published_at = str(trend_meta.get("published_at") or "").strip()
+    trend_date = _parse_public_news_date(trend_published_at)
+    trend_year_only = None
+    if not trend_date:
+        year_match = re.search(
+            r"\b(20(?:2[3-9]|3\d))\b",
+            " ".join((str(trend_meta.get("title") or ""), str(trend_meta.get("search_snippet") or ""), trend_published_at)),
+        )
+        if year_match:
+            trend_year_only = int(year_match.group(1))
+            trend_date = datetime(trend_year_only, 1, 1, tzinfo=timezone.utc)
+    if trend_date and trend_date.tzinfo is None:
+        trend_date = trend_date.replace(tzinfo=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    trend_is_recent = bool(
+        trend_date
+        and (
+            trend_year_only is not None
+            and now_utc.year - 3 <= trend_year_only <= now_utc.year
+            or trend_year_only is None
+            and trend_date <= now_utc
+            and trend_date.timestamp() >= now_utc.timestamp() - 3 * 365 * 86400
+        )
+    )
+    trend_is_snippet = trend_meta.get("evidence_type") == "search_snippet"
+    trend_has_usable_evidence = bool(
+        trend_meta.get("retrieved")
+        or (trend_is_snippet and (trend_meta.get("published_at") or trend_year_only is not None))
+    )
+    if (
+        trend_value
+        and len(trend_value) <= 320
+        and (trend_url in allowed_evidence_urls or trend_canonical_url in allowed_canonical_urls)
+        and "market trends" in str(trend_meta.get("category") or "").lower()
+        and trend_has_usable_evidence
+        and trend_is_recent
+    ):
+        ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+        trend_source = urlparse(trend_url).netloc.replace("www.", "") or "Public source"
+        ma["market_trends"] = _field(
+            trend_value, trend_source, trend.get("confidence") or "Medium"
+        )
+        ma["market_trends"].update({
+            "verification_status": "search-snippet-supported" if trend_is_snippet else "evidence-verified",
+            "evidence_type": "search result excerpt" if trend_is_snippet else "fetched page",
+            "source_urls": [trend_url],
+            "published_at": (
+                f"{trend_year_only} (year only)" if trend_year_only is not None
+                else trend_published_at
+            ),
+            "date_precision": "year" if trend_year_only is not None else "day",
+        })
+        report["market_analysis"] = ma
+    else:
+        ma = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
+        ma.pop("market_trends", None)
+        report["market_analysis"] = ma
+
+    # A fetched competitor source may confirm a direct competitor. A search
+    # snippet can only be shown as a sourced lead until its page is checked.
     judged_comps = []
+    competitor_candidates = []
     brand_l = company_name.lower()
-    for c in verdict.get("competitors") or []:
+    competitor_rows = list(verdict.get("competitors") or []) + list(verdict.get("competitor_candidates") or [])
+    seen_competitor_names = set()
+    for c in competitor_rows:
         if not isinstance(c, dict):
             continue
         name = (c.get("name") or "").strip()
@@ -5777,9 +6507,31 @@ def _apply_llm_judge(
             continue
         if name.lower() == brand_l or brand_l in name.lower() or name.lower() in brand_l:
             continue
+        normalized_competitor_name = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", name.lower())).strip()
+        if not normalized_competitor_name or normalized_competitor_name in seen_competitor_names:
+            continue
         conf = str(c.get("confidence") or "Medium")
         evidence_url = str(c.get("evidence_url") or "").strip()
-        if conf.lower() == "low" or evidence_url not in allowed_evidence_urls:
+        evidence_canonical_url = _canonical_public_url(evidence_url)
+        if (
+            conf.lower() == "low"
+            or (evidence_url not in allowed_evidence_urls and evidence_canonical_url not in allowed_canonical_urls)
+        ):
+            continue
+        source_meta = evidence_meta_by_url.get(evidence_url) or evidence_meta_by_url.get(evidence_canonical_url) or {}
+        page_source_text = evidence_page_text_by_url.get(evidence_url) or evidence_page_text_by_url.get(evidence_canonical_url) or ""
+        search_source_text = str(source_meta.get("search_snippet") or "")
+        normalized_name = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", name.lower())).strip()
+        normalized_page_text = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", page_source_text.lower()))
+        normalized_search_text = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", search_source_text.lower()))
+        name_in_fetched_page = bool(normalized_name and normalized_name in normalized_page_text)
+        name_in_search_excerpt = bool(normalized_name and normalized_name in normalized_search_text)
+        is_page_verified = bool(source_meta.get("retrieved") and name_in_fetched_page)
+        is_search_snippet = not is_page_verified
+        if is_search_snippet and (
+            "competitor" not in str(source_meta.get("category") or "").lower()
+            or not name_in_search_excerpt
+        ):
             continue
         official_domain = str(c.get("official_domain") or "").strip().lower().rstrip("/")
         official_domain = official_domain.removeprefix("https://").removeprefix("http://").removeprefix("www.")
@@ -5793,7 +6545,7 @@ def _apply_llm_judge(
             for host in known_hosts
         ):
             official_domain = ""
-        judged_comps.append({
+        candidate = {
             "name": name,
             "description": c.get("description") or "",
             "strengths": c.get("strengths") or "",
@@ -5802,13 +6554,132 @@ def _apply_llm_judge(
             "market_location": c.get("market_location") or "",
             "overlap_reason": c.get("overlap_reason") or "",
             "evidence_url": evidence_url,
+            "source_urls": [evidence_url],
             "threat_level": c.get("threat_level") or "Medium",
             "source": c.get("source") or "Judge-validated",
             "confidence": conf if conf in ("High", "Medium") else "Medium",
-        })
-    # Never fall back to the raw model/search competitor list. An empty judged
-    # list is intentional: no same-business competitor cleared the scope gate.
+            "verification_status": "evidence-verified" if is_page_verified else "search-snippet-supported",
+        }
+        if is_search_snippet:
+            competitor_candidates.append(candidate)
+        else:
+            judged_comps.append(candidate)
+        seen_competitor_names.add(normalized_competitor_name)
+    # Never pad with generic industry peers. Search snippets stay visibly marked
+    # as leads; only fetched evidence appears among confirmed competitors.
     report["competitors"] = judged_comps[:6] if judge_available else []
+
+    # Some search systems provide an explicit competitor list in their snippet,
+    # while the LLM judge correctly declines to call it page-verified. Preserve
+    # those named leads with the original result URL instead of losing them.
+    if judge_available:
+        candidates_by_name = {
+            re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", str(row.get("name") or "").lower())).strip(): row
+            for row in competitor_candidates
+            if isinstance(row, dict) and row.get("name")
+        }
+        competitor_evidence_rows = list(intel.get("_profile_evidence") or [])
+        if not competitor_evidence_rows:
+            competitor_evidence_rows = list(intel.get("_source_urls") or [])
+        extraction_patterns = (
+            r"\bcompetitors?\s+(?:include|are|such as|comprise)\s+(.{2,320})",
+            r"\bcompetitors?\b[^:\n.]{0,100}:\s*(.{2,320})",
+            r"\bpeers?\s+in\s+[^.\n]{1,80}\binclude\s+(.{2,320})",
+            r"\b(?:listed\s+)?peers?\s+(?:include|are|such as)\s+(.{2,320})",
+            r"\bpeers?\b[^:\n.]{0,80}:\s*(.{2,320})",
+        )
+        explicit_snippet_names = set()
+        generic_competitor_text = re.compile(
+            r"(?i)\b(?:ranked here|market capitali[sz]ation|market cap|peer comparison|"
+            r"performance snapshot|listed peers|frequently asked questions|competitor analysis|"
+            r"alternatives|competitors|top competitors|main competitors)\b"
+        )
+        for row in competitor_evidence_rows:
+            if not isinstance(row, dict) or "competitor" not in str(row.get("source") or row.get("category") or "").lower():
+                continue
+            source_url = str(row.get("url") or "").strip()
+            if not source_url.startswith(("http://", "https://")):
+                continue
+            search_excerpt = str(
+                row.get("search_snippet")
+                or row.get("snippet")
+                or row.get("text")
+                or ""
+            )[:1400]
+            if not _blob_matches_brand(f"{row.get('title') or ''} {search_excerpt}", company_name, domain):
+                continue
+            source_names = []
+            for pattern in extraction_patterns:
+                match = re.search(pattern, search_excerpt, re.I)
+                if match:
+                    names_text = re.split(
+                        r"(?i)\s+(?:see\b|compare\b|get\b|discover\b|visit\b|read\b|search query:)",
+                        match.group(1),
+                        maxsplit=1,
+                    )[0]
+                    names_text = re.sub(
+                        r"(?i)\.\s+(?:the full|the list|the company|these|this|according|for more|a comprehensive)\b.*$",
+                        "",
+                        names_text,
+                    ).strip(" .…")
+                    source_names = [part for part in re.split(r"\s*,\s*", names_text) if part.strip()]
+                    if source_names:
+                        final_part = source_names[-1]
+                        if re.search(r"(?i)\s+and\s+", final_part):
+                            first, last = re.split(r"(?i)\s+and\s+", final_part, maxsplit=1)
+                            source_names[-1:] = [first, last]
+                        elif len(source_names) > 1 and re.search(r"\s+&\s+", final_part):
+                            first, last = re.split(r"\s+&\s+", final_part, maxsplit=1)
+                            source_names[-1:] = [first, last]
+                    if search_excerpt.rstrip().endswith(("…", "...")) and source_names:
+                        # The last token of a truncated snippet may be only a
+                        # partial company name; don't promote that fragment.
+                        source_names = source_names[:-1]
+                    break
+            source_host = urlparse(source_url).netloc.replace("www.", "")
+            for raw_name in source_names:
+                name = re.sub(r"\s+", " ", str(raw_name)).strip(" \t\r\n,;:-|\"'")
+                name = re.sub(r"(?i)^and\s+", "", name).strip()
+                name = re.sub(r"(?i)\s+(?:see|compare|read|learn|visit)\b.*$", "", name).strip()
+                normalized_name = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", name.lower())).strip()
+                normalized_brand = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", company_name.lower())).strip()
+                if (
+                    len(name) < 2 or len(name) > 64 or not normalized_name
+                    or normalized_name in normalized_brand
+                    or normalized_brand in normalized_name
+                    or generic_competitor_text.search(name)
+                ):
+                    continue
+                explicit_snippet_names.add(normalized_name)
+                candidate = candidates_by_name.get(normalized_name)
+                if candidate:
+                    source_urls = list(candidate.get("source_urls") or [])
+                    if source_url not in source_urls:
+                        source_urls.append(source_url)
+                    candidate["source_urls"] = source_urls[:4]
+                    continue
+                candidate = {
+                    "name": name,
+                    "description": f"Named in a public competitor search result from {source_host}.",
+                    "official_domain": "",
+                    "market_location": "",
+                    "overlap_reason": "The search excerpt lists this company among the target's competitors; the linked page was not fetched for this claim.",
+                    "evidence_url": source_url,
+                    "source_urls": [source_url],
+                    "threat_level": "Medium",
+                    "source": source_host or "Public search result",
+                    "confidence": "Medium",
+                    "verification_status": "search-snippet-supported",
+                }
+                candidates_by_name[normalized_name] = candidate
+                competitor_candidates.append(candidate)
+        # Keep model-judged search leads first; the same candidate may have
+        # appeared in the explicit snippet extraction above.
+        competitor_candidates = [
+            row for key, row in candidates_by_name.items()
+            if key in explicit_snippet_names
+        ]
+    report["competitor_candidates"] = competitor_candidates[:4] if judge_available else []
 
     # SWOT and risk output is fact-gated: every retained point must refer to an
     # exact company-site or retrieved public-evidence URL. Analysis stays
@@ -5975,6 +6846,38 @@ def _apply_llm_judge(
             continue
         judged_keep[(row.get("name") or "").lower()] = row
 
+    def _supported_leadership_source(row: dict) -> tuple[str, dict] | None:
+        source_url = str(row.get("source_url") or "").strip()
+        canonical = _canonical_public_url(source_url)
+        meta = evidence_meta_by_url.get(source_url) or evidence_meta_by_url.get(canonical) or {}
+        excerpt = str(evidence_text_by_url.get(source_url) or evidence_text_by_url.get(canonical) or "")
+        name = re.sub(r"\s+", " ", str(row.get("name") or "")).strip().lower()
+        role = re.sub(r"\s+", " ", str(row.get("role") or "")).strip().lower()
+        text = re.sub(r"\s+", " ", excerpt).lower()
+        if (
+            not source_url
+            or (source_url not in allowed_evidence_urls and canonical not in allowed_evidence_urls)
+            or not name
+            or name not in text
+            or not role
+        ):
+            return None
+        role_aliases = (
+            ("chief executive officer", "ceo"),
+            ("chief technology officer", "cto"),
+            ("chief financial officer", "cfo"),
+            ("chief operating officer", "coo"),
+            ("managing director", "md"),
+            ("president",),
+            ("chairperson", "chairman", "chair"),
+            ("founder", "co-founder", "cofounder"),
+            ("director",),
+        )
+        aliases = next((group for group in role_aliases if any(token in role for token in group)), (role,))
+        if not any(alias in text for alias in aliases):
+            return None
+        return source_url, meta
+
     leaders = []
     if judge_available:
         for ldr in report.get("leadership_team") or []:
@@ -5991,15 +6894,30 @@ def _apply_llm_judge(
             if str(ldr.get("confidence") or "").lower() == "low":
                 continue
             j = judged_keep[key]
+            supported = _supported_leadership_source({**j, "name": ldr.get("name")})
+            if not supported:
+                continue
+            source_url, source_meta = supported
             ldr = dict(ldr)
             if j.get("role"):
                 ldr["role"] = j["role"]
             if j.get("status") in ("current", "historical"):
                 ldr["status"] = j["status"]
                 ldr["is_current"] = j["status"] == "current"
+            host = urlparse(source_url).netloc.lower().removeprefix("www.")
+            ldr.update({
+                "source": host or "Public source",
+                "source_urls": [source_url],
+                "verification_status": (
+                    "evidence-verified" if source_meta.get("retrieved")
+                    else "search-snippet-supported"
+                ),
+                "provenance": "public-evidence" if source_meta.get("retrieved") else "search-snippet",
+            })
             leaders.append(ldr)
 
-    # If judge listed a current CEO not in the scrape list, add only when Wikidata/evidence agrees
+    # Add source-backed leaders found by the judge even when the initial
+    # company-site scrape did not include them.
     existing_keys = {(l.get("name") or "").lower() for l in leaders}
     if judge_available:
         for row in verdict.get("leadership") or []:
@@ -6009,24 +6927,27 @@ def _apply_llm_judge(
             key = name.lower()
             if not name or key in existing_keys:
                 continue
-            if row.get("status") != "current":
+            if row.get("status") not in {"current", "historical"}:
                 continue
-            # Only inject a judge-approved officer when Wikidata independently
-            # names the same person for this exact company.
-            wd_names = {(n or "").lower() for n in (
-                (scraped.get("_wikidata") or {}).get("ceo") or []
-            ) + ((scraped.get("_wikidata") or {}).get("chair") or [])}
-            if key not in wd_names:
+            supported = _supported_leadership_source(row)
+            if not supported:
                 continue
+            source_url, source_meta = supported
+            host = urlparse(source_url).netloc.lower().removeprefix("www.")
             leaders.append({
                 "name": name,
-                "role": row.get("role") or "CEO",
-                "source": (scraped.get("_wikidata") or {}).get("source_url") or "Wikidata",
-                "confidence": "High",
-                "background": "Wikidata structured claim (current)",
-                "status": "current",
-                "is_current": True,
-                "provenance": "wikidata",
+                "role": row.get("role") or "Leadership",
+                "source": host or "Public source",
+                "source_urls": [source_url],
+                "confidence": "High" if source_meta.get("retrieved") else "Medium",
+                "verification_status": (
+                    "evidence-verified" if source_meta.get("retrieved")
+                    else "search-snippet-supported"
+                ),
+                "background": "Named with this role in the linked public source.",
+                "status": row.get("status"),
+                "is_current": row.get("status") == "current",
+                "provenance": "public-evidence" if source_meta.get("retrieved") else "search-snippet",
             })
             existing_keys.add(key)
 
@@ -6210,7 +7131,7 @@ def _normalize_report(report: dict, scraped: dict, company_name: str, url: str, 
             "key_differentiators": [],
         }
     elif isinstance(mkt, dict):
-        for k in ("industry", "market_position", "geographic_reach", "market_size_tam", "growth_rate"):
+        for k in ("industry", "market_position", "market_trends", "geographic_reach", "market_size_tam", "growth_rate"):
             if k in mkt and not isinstance(mkt[k], dict):
                 mkt[k] = _field(mkt[k])
             elif k == "geographic_reach":
@@ -6838,6 +7759,29 @@ def _parse_public_news_date(value: Any) -> datetime | None:
     return None
 
 
+def _search_result_date(value: Any) -> str:
+    """Extract an explicitly written calendar date from a search snippet."""
+    text = str(value or "")
+    patterns = (
+        r"\b\d{4}-\d{1,2}-\d{1,2}\b",
+        r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+        r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s+\d{1,2}(?:st|nd|rd|th)?[,]?\s+\d{4}\b",
+        r"\b\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+        r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+        r"Dec(?:ember)?)\s+\d{4}\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if not match:
+            continue
+        candidate = re.sub(r"(?i)(\d)(st|nd|rd|th)\b", r"\1", match.group(0))
+        parsed = _parse_public_news_date(candidate)
+        if parsed:
+            return parsed.strftime("%Y-%m-%d")
+    return ""
+
+
 def _news_date_from_html(html: str, prefer_event_date: bool = False) -> str:
     """Read an explicitly published date from article metadata, not the search snippet."""
     if not html:
@@ -7230,6 +8174,7 @@ def _company_ai_conclusion(company_name: str, report: dict) -> dict:
         ):
             offerings.append(str(value).strip()[:140])
     market_position = market.get("market_position")
+    market_trends = market.get("market_trends")
     geographic_reach = market.get("geographic_reach")
     snapshot = {
         "company": company_name,
@@ -7238,6 +8183,7 @@ def _company_ai_conclusion(company_name: str, report: dict) -> dict:
         "industry": _value(market.get("industry") or profile.get("industry")),
         "products_services": offerings,
         "market_position": "" if _is_unverified_ai_fact(market_position) else _value(market_position),
+        "market_trends": "" if _is_unverified_ai_fact(market_trends) else _value(market_trends),
         "geographic_reach": "" if _is_unverified_ai_fact(geographic_reach) else _value(geographic_reach),
         "recent_news": [
             {"title": n.get("title"), "date": n.get("date"), "summary": n.get("summary"), "source_url": n.get("source_url")}
@@ -7259,6 +8205,7 @@ def _company_ai_conclusion(company_name: str, report: dict) -> dict:
             ("Company profile", snapshot["description"]),
             ("Products and services", offerings),
             ("Market position", snapshot["market_position"]),
+            ("Market trends", snapshot["market_trends"]),
             ("Geographic reach", snapshot["geographic_reach"]),
             ("Recent news", snapshot["recent_news"]),
             ("Verified hiring", snapshot["verified_hiring"]),
@@ -7351,8 +8298,6 @@ def run(url: str) -> dict:
     scraped["wikipedia_url"] = wiki.get("url") or ""
     scraped["wikipedia_summary"] = wiki.get("summary") or ""
     scraped["wikipedia_description"] = wiki.get("description") or ""
-    if wiki.get("title"):
-        scraped["preferred_display_name"] = wiki["title"]
     scraped["_wikidata"] = wd
     if not _has_target_evidence(scraped, wiki, wd):
         raise ValueError(
@@ -7361,13 +8306,17 @@ def run(url: str) -> dict:
     print(f"[Research] Phase 1 done in {time.time()-t0:.1f}s")
 
     title = scraped.get("title", "")
-    company_name = re.split(r"[|\-—–:]", title)[0].strip() if title else brand
-    if len(company_name) > 48:
-        company_name = brand
-    company_name = _anchor_company_name(company_name, domain, scraped)
-    if scraped.get("preferred_display_name"):
+    site_name = re.split(r"[|\-:]", title)[0].strip() if title else brand
+    if len(site_name) > 48:
+        site_name = brand
+    site_name_matches_domain = _name_matches_domain(site_name, domain)
+    company_name = _anchor_company_name(site_name, domain, scraped)
+    # The official site's own title wins over a loosely matched Wikipedia or
+    # Wikidata label. Name/domain substring matches can confuse a person or a
+    # related organization with the operating company.
+    if not site_name_matches_domain and scraped.get("preferred_display_name"):
         company_name = _anchor_company_name(scraped["preferred_display_name"], domain, scraped)
-    if wd.get("matched") and wd.get("label"):
+    if not site_name_matches_domain and wd.get("matched") and wd.get("label"):
         company_name = _anchor_company_name(wd["label"], domain, scraped)
 
     intel = {
@@ -7402,14 +8351,29 @@ def run(url: str) -> dict:
     prefetch_name = company_name
     bg = ThreadPoolExecutor(max_workers=4, thread_name_prefix="prefetch")
     f_hiring = bg.submit(_fetch_hiring_signals, prefetch_name, domain, scraped.get("careers_text") or "", scraped)
-    f_leaders = bg.submit(_collect_leadership, prefetch_name, domain, scraped, intel)
+    # The profile-evidence pass below performs the bounded public leadership
+    # search in fast mode. Avoid a second overlapping DDG search here.
+    f_leaders = bg.submit(
+        _collect_leadership,
+        prefetch_name,
+        domain,
+        scraped,
+        intel,
+        search_public_web=RESEARCH_DEEP,
+    )
     # Search and fetch a small set of company-specific news/events while the
     # main report model is working. The result is added only after page fetch
     # and date verification; a search snippet alone is never shown as news.
     f_news = bg.submit(_collect_company_news_events, prefetch_name, domain)
-    # The dedicated AI profile pass below owns the evidence prompt when it is
-    # enabled. Avoid starting the legacy four-query evidence sweep unless that
-    # fallback is actually needed.
+    # Discover public evidence alongside hiring, leadership, and news prefetch.
+    # The report judge consumes it after the main profile synthesis returns.
+    profile_intel_snapshot = dict(intel)
+    profile_intel_snapshot["_scraped_pages"] = list(intel.get("_scraped_pages") or [])
+    profile_intel_snapshot["_source_urls"] = list(intel.get("_source_urls") or [])
+    f_profile_evidence = (
+        bg.submit(_ai_profile_evidence, prefetch_name, domain, scraped, profile_intel_snapshot)
+        if RESEARCH_AI_PROFILE_FALLBACK else None
+    )
     if not RESEARCH_AI_PROFILE_FALLBACK:
         _EVIDENCE_PREFETCH[(prefetch_name, domain)] = bg.submit(
             _build_site_evidence_blob, prefetch_name, domain, scraped
@@ -7427,6 +8391,24 @@ def run(url: str) -> dict:
         print(f"[Research] LLM failed ({e}) — using baseline scrape report with contacts")
         report = _baseline_report(url, company_name, scraped)
     print(f"[Research] Phase 3 done in {time.time()-t0:.1f}s")
+
+    # Search/fetch runs at the same time as the main model call. Give this
+    # bounded pass a short grace period after synthesis; dropping all evidence
+    # at an overly tight join timeout made good public results disappear.
+    profile_evidence = []
+    if f_profile_evidence:
+        try:
+            profile_evidence = f_profile_evidence.result(timeout=12)
+            intel["_profile_evidence"] = profile_evidence
+            _merge_profile_evidence_into_intel(profile_evidence, intel)
+            fetched_count = sum(1 for row in profile_evidence if row.get("retrieved"))
+            print(
+                f"[Research] Public evidence ready: {len(profile_evidence)} references, "
+                f"{fetched_count} fetched pages"
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[Research] Public profile evidence timed out or failed: {e}")
+            intel["_profile_evidence"] = []
 
     try:
         news_pages = f_news.result(timeout=8)
@@ -7567,7 +8549,7 @@ def run(url: str) -> dict:
         profile_fill = _llm_public_profile_fill(company_name, domain, scraped, merged_leaders)
         merged_leaders = profile_fill.get("leaders") or merged_leaders
     elif RESEARCH_AI_PROFILE_FALLBACK and (needs_people or needs_hq or needs_founded):
-        print("[Research] Dedicated AI profile pass will handle missing HQ/leadership/contact")
+        print("[Research] Missing profile fields will be kept only when public evidence supports them")
     report["leadership_team"] = auth.rank_leadership(
         _normalize_leadership_list(merged_leaders, company_name, scraped)
     )
@@ -7651,10 +8633,29 @@ def run(url: str) -> dict:
         for k in ("cin", "mca_status", "authorized_capital", "paid_up_capital", "zaubacorp_url"):
             report["company_profile"].pop(k, None)
 
-    # Dedicated people/contact enrichment runs after the broad report judge so
-    # model-known executives are not silently removed by the generic report
-    # gate.  Its own fact-level judge supplies the visible provenance/score.
-    report = _run_ai_profile_fallback(report, company_name, domain, scraped, intel)
+    # In fast mode the report judge already sees the targeted profile evidence,
+    # validates leadership/competitors/market claims, and attaches exact source
+    # URLs. Reuse that pass instead of making two more serial model calls.
+    report_judge_ok = (report.get("_judge") or {}).get("status") == "verified"
+    if RESEARCH_FAST and RESEARCH_AI_PROFILE_FALLBACK and report_judge_ok:
+        profile_rows = intel.get("_profile_evidence") or []
+        report["ai_enrichment"] = {
+            "status": "complete" if profile_rows else "complete_no_new_facts",
+            "provider": "Public evidence + report judge",
+            "judge_score": (report.get("_judge") or {}).get("quality_score", 0),
+            "summary": "Profile claims were reviewed against the retrieved public sources.",
+            "evidence_count": len(profile_rows),
+            "source_urls": [
+                str(row.get("url")) for row in profile_rows
+                if isinstance(row, dict) and str(row.get("url") or "").startswith(("http://", "https://"))
+            ][:20],
+            "leaders_added": 0,
+            "point_of_contact": {},
+        }
+    else:
+        # Keep the independent profile pass as a fail-soft path when the report
+        # judge is unavailable and for explicitly requested deep research.
+        report = _run_ai_profile_fallback(report, company_name, domain, scraped, intel)
 
     # The dedicated AI profile pass already searched and judged public contact
     # evidence. Do not repeat the older candidate+judge pair on the normal
@@ -7674,7 +8675,7 @@ def run(url: str) -> dict:
     )
     if RESEARCH_AI_PROFILE_FALLBACK and not ai_profile_failed and not existing_public_contact:
         report["_contact_verification"] = {
-            "status": "ai_profile_used",
+            "status": "public_report_judge_used",
             "source_urls": (report.get("ai_enrichment") or {}).get("source_urls", []),
         }
     elif RESEARCH_FAST and RESEARCH_AI_PROFILE_FALLBACK and ai_profile_failed:
@@ -7712,12 +8713,20 @@ def run(url: str) -> dict:
     t0 = time.time()
     careers_text = scraped.get("careers_text") or ""
     hiring = None
+    hiring_wait_timed_out = False
     if company_name == prefetch_name:
         try:
-            hiring = f_hiring.result()
+            hiring = f_hiring.result(timeout=12 if RESEARCH_FAST else None)
+        except TimeoutError:
+            # Keep the report responsive if a public job board/search provider
+            # stalls. The bounded lookup continues in its worker and is omitted
+            # from this report rather than repeated inline.
+            hiring = []
+            hiring_wait_timed_out = True
+            print("[Research] Hiring lookup exceeded the fast-mode budget; continuing without it")
         except Exception as e:  # noqa: BLE001
             print(f"[Research] Background hiring lookup failed ({e}) - retrying inline")
-    if hiring is None:
+    if hiring is None and not hiring_wait_timed_out:
         hiring = _fetch_hiring_signals(company_name, domain, careers_text, scraped)
     if (
         RESEARCH_LLM_ENRICH
@@ -7781,9 +8790,6 @@ def run(url: str) -> dict:
         low = str(cite_url).lower()
         if (not ENABLE_ZAUBACORP) and (not scraped.get("cin_verified")) and "zaubacorp.com" in low:
             return
-        if cite_url in seen_urls:
-            return
-        seen_urls.add(cite_url)
         try:
             d = urlparse(cite_url).netloc.replace("www.", "").lower()
         except Exception:
@@ -7794,6 +8800,11 @@ def run(url: str) -> dict:
             _canonical_public_url(cite_url) in retrieved_public_urls
             if retrieved is None else bool(retrieved)
         )
+        # The global source list contains only pages fetched and checked during
+        # this run. Search-result leads can remain attached to individual facts.
+        if not was_retrieved or cite_url in seen_urls:
+            return
+        seen_urls.add(cite_url)
         cat = category
         if cat in ("Web", "Search", "Public Web", "Social Media"):
             cat = auth.classify_source(cite_url, domain)
@@ -7823,7 +8834,7 @@ def run(url: str) -> dict:
     for contact_url in ((report.get("contact_intelligence") or {}).get("public_point_of_contact") or {}).get("source_urls", []):
         _add_cite("Public contact evidence", contact_url, "Public Web")
     for profile_url in (report.get("ai_enrichment") or {}).get("source_urls", []):
-        _add_cite("AI profile evidence", profile_url, "Public Web")
+        _add_cite("Public profile source", profile_url, "Public Web")
     for sl in scraped.get("social_links", [])[:8]:
         if auth.host_is_social(sl):
             _add_cite(urlparse(sl).netloc.replace("www.", ""), sl, "Social Media")

@@ -16,13 +16,15 @@ function MiniCard({ icon: Icon, title, children }) {
 
 export default function SummaryCards({ view }) {
   const { leaders, hiring, poc, overall } = view;
-  const hasPoc = poc.name || poc.email || poc.phone;
+  const visibleLeaders = leaders.filter((leader) => leader?.verification_status !== 'model-knowledge-reviewed');
+  const visiblePoc = poc?.verification_status === 'model-knowledge-reviewed' ? {} : poc;
+  const hasPoc = visiblePoc.name || visiblePoc.email || visiblePoc.phone;
 
   return (
     <div className="grid-3">
       <MiniCard icon={Users} title="Leadership">
-        {leaders.length ? (
-          leaders.slice(0, 4).map((l, i) => (
+        {visibleLeaders.length ? (
+          visibleLeaders.slice(0, 4).map((l, i) => (
             <div key={`${l.name}-${i}`}>
               <LeaderPerson leader={l} />
               <div className="mini-card__meta">
@@ -56,29 +58,24 @@ export default function SummaryCards({ view }) {
 
       <MiniCard
         icon={UserCheck}
-        title={poc.verification_status === 'model-knowledge-reviewed'
-          ? 'Suggested executive'
-          : poc.verification_status === 'search-snippet-supported'
-            ? 'Search result contact lead'
-            : 'Point of contact'}
+        title={visiblePoc.verification_status === 'search-snippet-supported'
+          ? 'Search result contact lead'
+          : 'Point of contact'}
       >
         {hasPoc ? (
           <>
-            {poc.name && <Person name={poc.name} role={poc.title} />}
-            {hasData(poc.email) && <div className="mini-card__meta">{poc.email}</div>}
-            {hasData(poc.phone) && <div className="mini-card__meta">{poc.phone}</div>}
-            {poc.reason && <div className="mini-card__meta">{poc.reason}</div>}
-            {poc.verification_status === 'model-knowledge-reviewed' && (
-              <div className="mini-card__meta">AI knowledge only - not verified as a direct company contact</div>
-            )}
-            {poc.verification_status === 'search-snippet-supported' && (
+            {visiblePoc.name && <Person name={visiblePoc.name} role={visiblePoc.title} />}
+            {hasData(visiblePoc.email) && <div className="mini-card__meta">{visiblePoc.email}</div>}
+            {hasData(visiblePoc.phone) && <div className="mini-card__meta">{visiblePoc.phone}</div>}
+            {visiblePoc.reason && <div className="mini-card__meta">{visiblePoc.reason}</div>}
+            {visiblePoc.verification_status === 'search-snippet-supported' && (
               <div className="mini-card__meta">Found in a search snippet; linked page was not fetched</div>
             )}
-            {poc.verification_status === 'evidence-verified' && (
+            {visiblePoc.verification_status === 'evidence-verified' && (
               <div className="mini-card__meta">Evidence verified</div>
             )}
-            {(poc.source || poc.confidence) && (
-              <div className="mini-card__meta">{[poc.source, poc.confidence].filter(Boolean).join(' · ')}</div>
+            {(visiblePoc.source || visiblePoc.confidence) && (
+              <div className="mini-card__meta">{[visiblePoc.source, visiblePoc.confidence].filter(Boolean).join(' · ')}</div>
             )}
           </>
         ) : (

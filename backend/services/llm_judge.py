@@ -145,17 +145,26 @@ def judge_research_report(
     """
     wd = wikidata_hint or {}
     evidence_rows = []
-    for row in (public_evidence or [])[:12]:
+    for row in (public_evidence or [])[:18]:
         if not isinstance(row, dict):
             continue
         source_url = str(row.get("url") or "").strip()
         if not source_url.startswith(("http://", "https://")):
             continue
+        category = str(row.get("category") or "Public Web")[:60]
+        excerpt_limit = (
+            2200 if "leadership" in category.lower()
+            else 1300 if any(term in category.lower() for term in ("competitor", "trend"))
+            else 850
+        )
         evidence_rows.append({
             "url": source_url,
             "title": str(row.get("title") or row.get("domain") or "Public source")[:160],
-            "category": str(row.get("category") or "Public Web")[:60],
-            "excerpt": str(row.get("text") or row.get("snippet") or row.get("excerpt") or "")[:700],
+            "category": category,
+            "excerpt": str(row.get("text") or row.get("snippet") or row.get("excerpt") or "")[:excerpt_limit],
+            "search_result_excerpt": str(row.get("search_result_excerpt") or "")[:1000],
+            "published_at": str(row.get("published_at") or "")[:32],
+            "retrieved": bool(row.get("retrieved")),
         })
     mkt = report.get("market_analysis") if isinstance(report.get("market_analysis"), dict) else {}
     fin = report.get("financial_data") if isinstance(report.get("financial_data"), dict) else {}
@@ -174,6 +183,7 @@ def judge_research_report(
         "market_analysis": {
             "industry": _field_val(mkt.get("industry")),
             "market_position": _field_val(mkt.get("market_position")),
+            "market_trends": _field_val(mkt.get("market_trends")),
             "geographic_reach": _field_val(mkt.get("geographic_reach")),
         },
         "revenue_estimate": _field_val(fin.get("revenue_estimate")),
@@ -247,14 +257,14 @@ WEBSITE
 - site excerpt: {site_excerpt[:1000]}
 - offerings hint: {offerings_hint[:400]}
 
-PUBLIC WEB EVIDENCE (retrieved candidate sources; use URLs only from this list):
-{json.dumps(evidence_rows, ensure_ascii=False)[:7000] or "[]"}
+PUBLIC WEB EVIDENCE (fetched pages and search-result excerpts are marked separately; use URLs only from this list):
+{json.dumps(evidence_rows, ensure_ascii=False)[:18000] or "[]"}
 
 REPORT SNAPSHOT
 {json.dumps(snap)[:7500]}
 
 RULES:
-1. Define the business domain from the website and retrieved public evidence. A competitor MUST sell a materially overlapping product or service to similar customers in an evidenced market. Drop the company itself, generic peer labels, and cross-domain peers. Return fewer than three if the evidence does not support three. Include an official domain only when a supplied source supports it, and include the supporting evidence URL.
+1. Define the business domain from the website and supplied public evidence. A competitor MUST sell a materially overlapping product or service to similar customers in an evidenced market. Drop the company itself, generic peer labels, and cross-domain peers. Return fewer than three if the evidence does not support three. Use a fetched page to support a confirmed competitor. If only a search-result excerpt names the competitor, put it in competitor_candidates, not competitors. Include an official domain only when a supplied source supports it, and include the supporting evidence URL.
 2. Leadership:
    - Keep CURRENT operating executives (CEO, MD, President, Chair, CFO, CTO, COO) only when the same-company evidence or domain-matched Wikidata supports the person and role.
    - Treat CEO, Founder, Chairman, Chairperson, and board roles as separate claims. Never transfer a person from a similarly named company or a subsidiary.
@@ -263,9 +273,15 @@ RULES:
    - Drop people who are directors of unrelated subsidiaries, or names that look like page chrome.
    - If Wikidata lists a CEO, that person MUST appear as current CEO. Do not substitute a cofounder.
    - If the evidence does not clearly identify a role, omit it. Do not fill a missing person from model memory.
+   - The leadership array may add a person absent from the report snapshot only when the supplied evidence itself names that person and role. Include that evidence's exact source_url.
 3. geographic_reach.value MUST be a short human string (e.g. "Global" or "India and Middle East"). Never an object.
 4. Revenue and funding: keep a value only when the exact company and value are supported by a supplied evidence excerpt/source URL. Revenue and funding totals also need a currency and scale (million/billion/crore) or a 9+ digit amount. Reject stock prices like "$507.29". Prefer domain-matched Wikidata revenue. Never infer funding stage or profitability. Otherwise use "Not publicly available".
 5. market_position must be a real business summary — never login pages, cookie banners, or unrelated SaaS.
+   Return market_trends only when a fetched page or a search-result excerpt explicitly
+   supports the industry trend and the supplied evidence gives a publication date or
+   report year within three years. Do not invent a day or month from a year-only title.
+   Cite that exact source URL and distinguish an industry trend from a claim about this
+   company. A search-result excerpt remains snippet-supported, not page-verified.
 6. Review every supplied report section, including SWOT, risks, news, hiring, contacts, products, leadership, competitors, and finance. For SWOT and risk entries, retain only claims that point to a supplied source URL. Label strategic implications as analysis/inference, not fact. Do not create opportunities, threats, or a numeric overall risk level from generic industry assumptions.
 7. Keep a news or event item only when a supplied public source clearly concerns this exact company and supports its date. A future date is valid only for a clearly identified event. Do not call an undated item “latest”; reject unrelated publication names and search-result noise.
 8. quality_score is AUTHENTICITY 0-100, NOT completeness. Penalize missing current CEO, unit-less revenue, weak sources, and cross-domain people/competitors. Typical honest range is 45-85. Never 100 unless Wikidata+official site agree on identity, CEO, and HQ.
@@ -275,7 +291,8 @@ RULES:
   "display_name": "...",
   "industry": {{"value":"...","confidence":"High|Medium|Low","source":"..."}},
   "competitors": [{{"name":"...","description":"...","strengths":"...","weaknesses":"...","official_domain":"... or empty","market_location":"... or empty","overlap_reason":"...","evidence_url":"exact URL from PUBLIC WEB EVIDENCE","threat_level":"High|Medium|Low","confidence":"High|Medium|Low","source":"source domain/category"}}],
-  "leadership": [{{"name":"...","role":"...","status":"current|historical","keep":true}}],
+  "competitor_candidates": [{{"name":"...","description":"...","official_domain":"... or empty","market_location":"... or empty","overlap_reason":"...","evidence_url":"exact URL from PUBLIC WEB EVIDENCE","confidence":"High|Medium|Low","source":"source domain/category"}}],
+  "leadership": [{{"name":"...","role":"...","status":"current|historical","keep":true,"source_url":"exact URL from PUBLIC WEB EVIDENCE"}}],
   "drop_people": ["names to remove"],
   "poc_name": "current CEO/MD/President or empty",
   "poc_title": "...",
@@ -290,6 +307,7 @@ RULES:
   "leadership_keep": true/false,
   "drop_registry": true,
   "market_position": {{"value":"...","confidence":"Medium","source":"Website"}},
+  "market_trends": {{"value":"... or empty","source_url":"exact URL from PUBLIC WEB EVIDENCE or empty","confidence":"High|Medium|Low"}},
   "swot_analysis": {{
     "strengths": [{{"point":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}],
     "weaknesses": [{{"point":"...","source_url":"exact URL from PUBLIC WEB EVIDENCE","basis":"fact|analysis","confidence":"High|Medium|Low"}}],
@@ -428,25 +446,21 @@ RULES
    Managing Director, or another named senior leader only for this exact company.
 2. Founders may be historical; do not turn a historical founder into a current
    operating executive or point of contact.
-3. A name/title not literally present in the evidence may still be retained only
-   as model-knowledge-reviewed when it is a well-known public fact and the
-   company identity is unambiguous. Use Medium confidence at most in that case.
-   If a name appears only in an unfetched search snippet, label it
-   search-snippet-supported; do not call the linked page fetched or verified.
+3. Use only claims supported by the supplied public evidence. If a name appears
+   only in an unfetched search snippet, label it search-snippet-supported; do not
+   call the linked page fetched or verified. Model memory alone is not report evidence.
 4. Keep email or phone ONLY when the exact value appears in the evidence. Never
    infer an address pattern, guess a number, or reveal private contact details.
 5. A point of contact must be a current operating executive or an explicitly
    public business contact. Prefer a current leader over a historical founder.
-6. Headquarters and founding year may use model knowledge only when the company
-   identity is unambiguous; mark those facts model-knowledge-reviewed.
+6. Headquarters and founding year require a supplied public source; leave them
+   empty when the evidence does not support them.
 7. Drop unsupported, low-confidence, wrong-company, duplicate, and page-chrome
    claims. Prefer an empty value to a confident error.
-8. Products/services, market position, and geographic reach may be retained from
-   model knowledge only as Medium-confidence suggestions. They are not verified
-   claims unless a supplied evidence record supports them.
-9. Competitor candidates must overlap in business domain and operating market.
-   Keep a candidate without evidence only as a model-knowledge suggestion; do
-   not present it as a verified competitor. Never guess an official domain.
+8. Products/services, market position, and geographic reach require supplied
+   evidence; do not fill them from model knowledge.
+9. Competitor candidates must overlap in business domain and operating market,
+   and must be supported by a supplied public source. Never guess an official domain.
 10. Do not infer recent news, current hiring, revenue/funding, emails, or phone
     numbers from model memory. Those require literal current public evidence.
 

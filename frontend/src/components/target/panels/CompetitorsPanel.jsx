@@ -55,12 +55,12 @@ export default function CompetitorsPanel({ report }) {
           );
         })
       ) : (
-        <p className="field-value muted">No direct competitors were confirmed by the retrieved public evidence.</p>
+        <p className="field-value muted">No direct competitors were confirmed from fetched public pages.</p>
       )}
 
       {sourcedReferences.length > 0 && (
         <section style={{ marginTop: 18 }}>
-          <h4 className="subhead">Additional competitor references</h4>
+          <h4 className="subhead">Competitor leads from public sources</h4>
           {sourcedReferences.slice(0, 4).map((c, i) => {
             const sourceUrls = asArray(c.source_urls).map(safeHttpUrl).filter(Boolean).slice(0, 3);
             return (

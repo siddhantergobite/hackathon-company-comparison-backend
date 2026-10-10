@@ -10,11 +10,17 @@ export default function OverviewPanel({ report }) {
   const offerings = (Array.isArray(prod.primary_offerings) ? prod.primary_offerings : asArray(prod.value))
     .map((row) => (typeof row === 'string' ? { item: row } : row))
     .map((row) => ({ ...row, item: row?.item || val(row) }))
-    .filter((row) => row.item && !isJunkText(row.item));
+    .filter((row) => row.item && !isJunkText(row.item)
+      && row.verification_status !== 'model-knowledge-reviewed');
 
   const mp = mkt.market_position;
   const mpText = typeof mp === 'object' ? val(mp) : mp;
   const marketPosition = !isJunkText(mpText) && hasData(mpText) ? mp : null;
+  const marketTrend = mkt.market_trends;
+  const marketTrendUrl = typeof marketTrend?.source_urls?.[0] === 'string'
+    && /^https?:\/\//i.test(marketTrend.source_urls[0])
+    ? marketTrend.source_urls[0]
+    : '';
 
   return (
     <>
@@ -33,9 +39,6 @@ export default function OverviewPanel({ report }) {
           {offerings.map((row, i) => (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} key={`${row.item}-${i}`}>
               <Tag>{row.item}</Tag>
-              {row.verification_status === 'model-knowledge-reviewed' && (
-                <span className="cite-badge cite-badge--medium">AI knowledge - unverified</span>
-              )}
               {row.verification_status === 'search-snippet-supported' && (
                 <span className="cite-badge cite-badge--medium">Search snippet only - page not fetched</span>
               )}
@@ -53,6 +56,18 @@ export default function OverviewPanel({ report }) {
 
       <h4 className="subhead">Market position</h4>
       {marketPosition ? <IntelRow label="Market position" field={marketPosition} /> : <p className="field-value muted">—</p>}
+      <IntelRow label="Industry trend context" field={marketTrend} />
+      {marketTrendUrl && (
+        <p className="text-xs muted" style={{ marginTop: 4 }}>
+          <span className="cite-badge">
+            {marketTrend?.verification_status === 'search-snippet-supported'
+              ? 'Dated search result; page not fetched'
+              : 'Fetched source page'}
+          </span>{' '}
+          <a href={marketTrendUrl} target="_blank" rel="noopener noreferrer">Open source</a>
+          {marketTrend?.published_at ? ` · ${marketTrend.published_at}` : ''}
+        </p>
+      )}
       <IntelRow label="Geographic reach" field={mkt.geographic_reach} />
 
       <h4 className="subhead">Website technology</h4>

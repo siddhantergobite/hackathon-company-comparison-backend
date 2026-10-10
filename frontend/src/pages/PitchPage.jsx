@@ -7,7 +7,7 @@ import { getTargetName } from '../utils/target';
 
 export default function PitchPage() {
   const { brochure, target, pitch, requests, generatePitch } = useCasefile();
-  const { loading, error } = requests.pitch || {};
+  const { loading, error, startedAt } = requests.pitch || {};
   const ready = Boolean(brochure && target);
 
   return (
@@ -42,6 +42,7 @@ export default function PitchPage() {
           <LoadingPanel
             title="Generating pitch…"
             steps={['Comparing your services with their needs', 'Scoring the fit', 'Drafting the outreach email']}
+            startedAt={startedAt}
           />
         )}
 

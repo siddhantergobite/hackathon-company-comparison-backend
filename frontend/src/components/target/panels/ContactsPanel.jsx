@@ -5,10 +5,13 @@ import { asArray, hasData, val } from '../../../utils/data';
 export default function ContactsPanel({ report }) {
   const co = report.company_profile || {};
   const ci = report.contact_intelligence || {};
-  const poc = report.point_of_contact || {};
+  const rawPoc = report.point_of_contact || {};
+  const poc = rawPoc.verification_status === 'model-knowledge-reviewed' ? {} : rawPoc;
   const address = ci.registered_address || val(co.registered_address);
-  const phones = asArray(ci.phones).filter((p) => p && p.number);
-  const emails = asArray(ci.emails).filter((e) => e && e.email);
+  const phones = asArray(ci.phones).filter((p) => p && p.number
+    && p.verification_status !== 'model-knowledge-reviewed');
+  const emails = asArray(ci.emails).filter((e) => e && e.email
+    && e.verification_status !== 'model-knowledge-reviewed');
   const offices = asArray(ci.addresses)
     .map((a) => (typeof a === 'string' ? a : a?.address || a?.value || ''))
     .filter(hasData);
@@ -25,11 +28,9 @@ export default function ContactsPanel({ report }) {
         <div className="contact-block">
           <strong>
             <UserRound size={15} style={{ verticalAlign: '-2px', marginRight: 6 }} aria-hidden="true" />
-            {poc.verification_status === 'model-knowledge-reviewed'
-              ? 'Suggested executive contact'
-              : poc.verification_status === 'search-snippet-supported'
-                ? 'Search result contact lead'
-                : 'Public point of contact'}
+            {poc.verification_status === 'search-snippet-supported'
+              ? 'Search result contact lead'
+              : 'Public point of contact'}
           </strong>
           <div style={{ marginTop: 4 }}>
             {poc.name && <div><strong>{poc.name}</strong>{poc.title ? ` · ${poc.title}` : ''}</div>}

@@ -10,7 +10,7 @@ export default function BrochurePage() {
   const { brochure, requests, searchBrochure, uploadBrochure } = useCasefile();
   const toast = useToast();
   const [query, setQuery] = useState('');
-  const { loading, error } = requests.brochure || {};
+  const { loading, error, startedAt } = requests.brochure || {};
 
   const onSearch = () => {
     const q = query.trim();
@@ -54,6 +54,7 @@ export default function BrochurePage() {
             <LoadingPanel
               title="Extracting brochure with AI…"
               steps={['Reading the source', 'Extracting services and industries', 'Structuring the company profile']}
+              startedAt={startedAt}
             />
           ) : (
             <>

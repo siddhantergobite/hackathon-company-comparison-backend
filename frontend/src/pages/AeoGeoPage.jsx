@@ -36,7 +36,7 @@ export default function AeoGeoPage() {
   const [url, setUrl] = useState('');
   const [keywords, setKeywords] = useState('');
   const [tab, setTab] = useState('topics');
-  const { loading, error } = requests.aeo || {};
+  const { loading, error, startedAt } = requests.aeo || {};
 
   const submit = (e) => {
     e.preventDefault();
@@ -119,7 +119,7 @@ export default function AeoGeoPage() {
           </Banner>
         )}
 
-        {loading && <LoadingPanel title="Running AEO / GEO audit…" steps={AEO_STEPS} />}
+        {loading && <LoadingPanel title="Running AEO / GEO audit…" steps={AEO_STEPS} startedAt={startedAt} />}
 
         {!loading && !aeo && (
           <EmptyState icon={Radar} title="No audit yet">

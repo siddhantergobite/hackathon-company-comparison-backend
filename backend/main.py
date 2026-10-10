@@ -19,6 +19,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
@@ -141,17 +142,51 @@ class CompanyResearchRequest(BaseModel):
 # browser tabs; excess research requests wait in this small queue instead of
 # saturating the process with nested worker pools.
 _research_slots = asyncio.Semaphore(2)
+_research_inflight: dict[str, asyncio.Task] = {}
+
+
+def _research_request_key(value: str) -> str:
+    raw = str(value or "").strip()
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    path = parsed.path.rstrip("/") or "/"
+    try:
+        port = parsed.port
+    except ValueError:
+        return raw.lower()
+    default_port = (parsed.scheme.lower() == "https" and port == 443) or (parsed.scheme.lower() == "http" and port == 80)
+    authority = host if not port or default_port else f"{host}:{port}"
+    return f"{parsed.scheme.lower() or 'https'}://{authority}{path}?{parsed.query}"
+
+
+async def _run_company_research(url: str) -> dict:
+    async with _research_slots:
+        return await run_in_threadpool(company_research.run, url)
 
 
 @app.post("/api/company-research")
 async def api_company_research(req: CompanyResearchRequest):
     """Full target-company intelligence report from a public website URL."""
     try:
-        # The research pipeline performs blocking HTTP and model calls.  Keep
-        # it off the event loop so /health, UI assets, and other requests stay
-        # responsive while a long company lookup is running.
-        async with _research_slots:
-            result = await run_in_threadpool(company_research.run, req.url)
+        # Share an identical in-flight lookup across page remounts/double
+        # submits. Shield the worker so a browser navigation cannot cancel the
+        # research; the next request for this URL can join the same task.
+        key = _research_request_key(req.url)
+        task = _research_inflight.get(key)
+        if task is None or task.done():
+            task = asyncio.create_task(_run_company_research(req.url))
+            _research_inflight[key] = task
+
+            def clear_finished(done: asyncio.Task, request_key: str = key) -> None:
+                if _research_inflight.get(request_key) is done:
+                    _research_inflight.pop(request_key, None)
+                try:
+                    done.exception()
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            task.add_done_callback(clear_finished)
+        result = await asyncio.shield(task)
         return JSONResponse(
             content=result,
             headers={

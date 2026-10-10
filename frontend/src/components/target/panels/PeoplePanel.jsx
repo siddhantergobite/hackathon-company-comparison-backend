@@ -14,7 +14,8 @@ const verificationLabel = (leader) =>
 export default function PeoplePanel({ report }) {
   const co = report.company_profile || {};
   const emp = report.employee_insights || {};
-  const leaders = asArray(report.leadership_team);
+  const leaders = asArray(report.leadership_team)
+    .filter((leader) => leader?.verification_status !== 'model-knowledge-reviewed');
   const hiring = asArray(report.hiring_signals).filter((h) => h && h.role);
   const ai = report.ai_enrichment || {};
   const profileReviewComplete = ['complete', 'complete_no_new_facts', 'ai_profile_used'].includes(ai.status);
