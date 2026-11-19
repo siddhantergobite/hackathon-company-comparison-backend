@@ -80,7 +80,7 @@ def _azure_from_fallbacks(vals: dict[str, str]) -> tuple[str, str, str]:
         vals.get("AZURE_OPENAI_MODEL", ""),
         parent_vals.get("AZURE_OPENAI_MODEL", ""),
         os.getenv("AZURE_OPENAI_MODEL", ""),
-        "gpt-5-mini",
+        "gpt-5-nano",
     )
     return endpoint, key, model
 
@@ -368,7 +368,7 @@ def chat(
                 return text
 
             text = ""
-            # Fast path: do not inflate reasoning budget (that makes gpt-5-mini think for minutes)
+            # Fast path: do not inflate reasoning budget (that makes gpt-5-nano think for minutes)
             extra_think = 0 if (reasoning_effort or "").lower() in ("low", "minimal", "none") else (
                 6000 if _is_reasoning_model(use_model) else 0
             )

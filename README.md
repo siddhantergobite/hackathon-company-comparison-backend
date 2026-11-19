@@ -9,7 +9,7 @@ One FastAPI + React application with three tools:
 | **News Intelligence** | Headlines from ~48 publishers, grouped into stories, categorised, AI-summarised, with a source admin | `/casefile/news`, `/casefile/news-admin` |
 
 - **API + UI:** one server on `http://127.0.0.1:8765` (UI at `/casefile/`, also redirected from `/`)
-- **LLM:** Azure OpenAI primary (`gpt-5-mini`); Groq / Gemini optional fallbacks
+- **LLM:** Azure OpenAI primary (`gpt-5-nano`); Groq / Gemini optional fallbacks
 - **Storage:** MongoDB for Event Hub and News (Casefile itself needs no database)
 
 There is no Streamlit creative studio and no `localhost:3000` UI.
@@ -45,7 +45,7 @@ Copy `.env.example` → `.env` and set your keys. Only the Azure block is requir
 ```env
 AZURE_OPENAI_ENDPOINT=https://YOUR.openai.azure.com/openai/v1
 AZURE_OPENAI_API_KEY=...
-AZURE_OPENAI_MODEL=gpt-5-mini
+AZURE_OPENAI_MODEL=gpt-5-nano
 
 GROQ_API_KEY=              # optional
 GEMINI_API_KEY=            # optional text fallback

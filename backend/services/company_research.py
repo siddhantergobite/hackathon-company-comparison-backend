@@ -28,7 +28,7 @@ MODEL = (
     else (
         llm_client.GROQ_MODEL
         if getattr(llm_client, "RESEARCH_USE_GROQ", False) and llm_client.groq_configured()
-        else (llm_client.AZURE_MODEL if llm_client.azure_configured() else "gpt-5-mini")
+        else (llm_client.AZURE_MODEL if llm_client.azure_configured() else "gpt-5-nano")
     )
 )
 
